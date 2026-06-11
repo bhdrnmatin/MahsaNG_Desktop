@@ -243,7 +243,14 @@ func (a *App) onGetConfig() {
 	}
 	go func() {
 		ctx := context.Background()
-		fetched := provider.Collect(ctx, a.providers, maxServers)
+		// Over-fetch, then keep only TCP-reachable servers: most free configs
+		// are dead, and the cheap dial filter means the maxServers slots that
+		// get the expensive TEST ALL probe are all plausible candidates.
+		fetched := provider.Collect(ctx, a.providers, maxServers*6)
+		fyne.Do(func() {
+			a.setStatus(fmt.Sprintf("Checking %d configs for reachability…", len(fetched)))
+		})
+		fetched = tester.FilterAlive(ctx, fetched)
 		fyne.Do(func() {
 			// Drop tested-and-failed configs, keep working + untested ones,
 			// then top up with newly fetched configs (deduped) up to the cap.
