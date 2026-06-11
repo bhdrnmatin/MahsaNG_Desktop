@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"image/color"
 	"net"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -97,7 +98,19 @@ func (a *App) buildContent() fyne.CanvasObject {
 	title.TextSize = 20
 	title.TextStyle = fyne.TextStyle{Bold: true}
 	addBtn := widget.NewButtonWithIcon("", theme.ContentAddIcon(), a.onAddClipboard)
-	top := container.NewHBox(title, layout.NewSpacer(), addBtn)
+
+	credit := canvas.NewText("powered by MATOK", color.Gray{Y: 0x99})
+	credit.TextSize = 12
+	ghURL, _ := url.Parse("https://github.com/matinbhdrn77")
+	tgURL, _ := url.Parse("https://t.me/mat_bh")
+	creditRow := container.NewHBox(credit,
+		widget.NewHyperlink("github.com/matinbhdrn77", ghURL),
+		widget.NewHyperlink("telegram:@mat_bh", tgURL))
+
+	top := container.NewVBox(
+		container.NewHBox(title, layout.NewSpacer(), addBtn),
+		creditRow,
+	)
 
 	a.list = widget.NewList(a.rowCount, a.rowTemplate, a.rowUpdate)
 	a.list.OnSelected = func(id widget.ListItemID) {
