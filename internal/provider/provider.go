@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"regexp"
 	"strings"
@@ -24,13 +25,20 @@ type Provider interface {
 
 // Collect fetches every provider, de-duplicates by link, and returns at most
 // limit configs interleaved round-robin across providers (so the result is a
-// spread of sources, not all from whichever provider returned first). limit <= 0
-// means no cap. Providers that error are skipped.
+// spread of sources, not all from whichever provider returned first). Each
+// provider's list is shuffled first, so repeated calls return a random
+// selection rather than always the same head of the list. limit <= 0 means no
+// cap. Providers that error are skipped.
 func Collect(ctx context.Context, providers []Provider, limit int) []model.Config {
 	lists := make([][]model.Config, len(providers))
 	for i, p := range providers {
 		if cs, err := p.Fetch(ctx); err == nil {
-			lists[i] = cs
+			shuffled := make([]model.Config, len(cs))
+			copy(shuffled, cs)
+			rand.Shuffle(len(shuffled), func(a, b int) {
+				shuffled[a], shuffled[b] = shuffled[b], shuffled[a]
+			})
+			lists[i] = shuffled
 		}
 	}
 	seen := make(map[string]struct{})

@@ -34,6 +34,8 @@ func TestCollectCapsAndSpreads(t *testing.T) {
 	if len(got) != 4 {
 		t.Fatalf("limit not honored: got %d, want 4", len(got))
 	}
+	// Even spread across providers holds regardless of shuffle (each provider
+	// has 5 configs; limit 4 -> round-robin takes 2 from each).
 	counts := map[string]int{}
 	for _, c := range got {
 		counts[c.Provider]++
@@ -41,13 +43,43 @@ func TestCollectCapsAndSpreads(t *testing.T) {
 	if counts["A"] != 2 || counts["B"] != 2 {
 		t.Fatalf("expected even spread 2/2, got %v", counts)
 	}
-	// Round-robin order: a1, b1, a2, b2
-	wantOrder := []string{"a1", "b1", "a2", "b2"}
-	for i, w := range wantOrder {
-		if got[i].Link != w {
-			t.Fatalf("order mismatch at %d: got %q want %q (full: %v)", i, got[i].Link, w, links(got))
+}
+
+func TestCollectRandomizes(t *testing.T) {
+	// With a list far larger than the cap, two calls should (almost surely)
+	// return different selections.
+	links := make([]string, 200)
+	for i := range links {
+		links[i] = fmt.Sprintf("c%d", i)
+	}
+	p := stub{"A", makeConfigs("A", links...)}
+	first := linkSet(Collect(context.Background(), []Provider{p}, 10))
+	for try := 0; try < 5; try++ {
+		if !sameSet(first, linkSet(Collect(context.Background(), []Provider{p}, 10))) {
+			return // differs -> randomized, as expected
 		}
 	}
+	t.Fatal("Collect returned the same 10 configs across 6 calls; not randomized")
+}
+
+func linkSet(cs []model.Config) map[string]struct{} {
+	m := make(map[string]struct{}, len(cs))
+	for _, c := range cs {
+		m[c.Link] = struct{}{}
+	}
+	return m
+}
+
+func sameSet(a, b map[string]struct{}) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k := range a {
+		if _, ok := b[k]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func TestCollectDedups(t *testing.T) {
