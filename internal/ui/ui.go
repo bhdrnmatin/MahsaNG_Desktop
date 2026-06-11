@@ -33,7 +33,7 @@ import (
 
 const (
 	socksPort  = 10809
-	maxServers = 20 // GET CONFIG caps the list to this many, spread across providers
+	maxServers = 100 // GET CONFIG caps the list to this many, spread across providers
 )
 
 // App holds the running UI state.
@@ -51,8 +51,9 @@ type App struct {
 	filterBtn *widget.Button
 	connBtn  *widget.Button
 
-	filter   string // "" = All, otherwise a provider name
-	selected int    // index into all, or -1
+	filter    string // "" = All, otherwise a provider name
+	selected  int    // index into all, or -1
+	connected int    // index into all of the connected config, or -1
 
 	tunnel  *core.Tunnel
 	busy    bool // a fetch/test is running
@@ -65,6 +66,7 @@ func New() *App {
 		fyneApp:   app.NewWithID("net.mahsang.desktop"),
 		providers: provider.Builtins(),
 		selected:  -1,
+		connected: -1,
 	}
 	a.win = a.fyneApp.NewWindow("MahsaNG")
 	a.win.Resize(fyne.NewSize(560, 760))
@@ -128,30 +130,49 @@ func (a *App) rowTemplate() fyne.CanvasObject {
 	ping.TextSize = 13
 	ping.TextStyle = fyne.TextStyle{Bold: true}
 
-	// Stable child order: [0]=nameWrap [1]=spacer [2]=prov [3]=proto [4]=ping
-	return container.NewHBox(nameWrap, layout.NewSpacer(), prov, proto, ping)
+	// Content child order: [0]=nameWrap [1]=spacer [2]=prov [3]=proto [4]=ping
+	content := container.NewHBox(nameWrap, layout.NewSpacer(), prov, proto, ping)
+
+	// A vertical bar on the left, green for the connected config (the Border
+	// left slot stretches it to full row height). NewBorder(nil,nil,left,nil,
+	// content) => Objects = [content, bar].
+	bar := canvas.NewRectangle(color.Transparent)
+	bar.SetMinSize(fyne.NewSize(5, 1))
+	return container.NewBorder(nil, nil, bar, nil, content)
 }
 
 func (a *App) rowUpdate(id widget.ListItemID, obj fyne.CanvasObject) {
 	if id < 0 || id >= len(a.view) {
 		return
 	}
-	c := a.all[a.view[id]]
+	gi := a.view[id]
+	c := a.all[gi]
+
 	row := obj.(*fyne.Container)
-	nameWrap := row.Objects[0].(*fyne.Container)
+	content := row.Objects[0].(*fyne.Container)
+	bar := row.Objects[1].(*canvas.Rectangle)
+
+	nameWrap := content.Objects[0].(*fyne.Container)
 	nameWrap.Objects[0].(*widget.Label).SetText(c.Name)
 
-	prov := row.Objects[2].(*canvas.Text)
+	prov := content.Objects[2].(*canvas.Text)
 	prov.Text = c.Provider
 	prov.Refresh()
 
-	proto := row.Objects[3].(*canvas.Text)
+	proto := content.Objects[3].(*canvas.Text)
 	proto.Text = c.Protocol
 	proto.Refresh()
 
-	ping := row.Objects[4].(*canvas.Text)
+	ping := content.Objects[4].(*canvas.Text)
 	ping.Text, ping.Color = pingLabel(c.PingMs)
 	ping.Refresh()
+
+	if gi == a.connected {
+		bar.FillColor = color.NRGBA{R: 0x22, G: 0xc5, B: 0x5e, A: 0xff} // green
+	} else {
+		bar.FillColor = color.Transparent
+	}
+	bar.Refresh()
 }
 
 func pingLabel(ms int64) (string, color.Color) {
@@ -175,6 +196,13 @@ func (a *App) onGetConfig() {
 	}
 	a.setBusy(true)
 	a.setStatus("Fetching configs…")
+	// Remember the connected server's link so its green marker survives the
+	// list refresh if it happens to be fetched again (the tunnel keeps running
+	// regardless).
+	connectedLink := ""
+	if a.connected >= 0 {
+		connectedLink = a.all[a.connected].Link
+	}
 	go func() {
 		ctx := context.Background()
 		fetched := provider.Collect(ctx, a.providers, maxServers)
@@ -185,6 +213,7 @@ func (a *App) onGetConfig() {
 			a.rebuildView()
 			a.list.UnselectAll()
 			a.selected = -1
+			a.connected = indexOfLink(a.all, connectedLink)
 			a.setBusy(false)
 			if len(a.all) == 0 {
 				a.setStatus("No configs returned. Check provider/network.")
@@ -320,7 +349,9 @@ func (a *App) onConnectToggle() {
 	if a.tunnel != nil {
 		a.tunnel.Close()
 		a.tunnel = nil
+		a.connected = -1
 		a.connBtn.SetText("Connect")
+		a.list.Refresh()
 		a.setStatus("Disconnected.")
 		return
 	}
@@ -328,7 +359,8 @@ func (a *App) onConnectToggle() {
 		a.setStatus("Select a config first, then Connect.")
 		return
 	}
-	c := a.all[a.selected]
+	target := a.selected
+	c := a.all[target]
 	a.setStatus("Connecting…")
 	go func() {
 		t, err := core.StartTunnel(c.Outbound, socksPort)
@@ -338,7 +370,9 @@ func (a *App) onConnectToggle() {
 				return
 			}
 			a.tunnel = t
+			a.connected = target
 			a.connBtn.SetText("Disconnect")
+			a.list.Refresh()
 			a.setStatus(fmt.Sprintf("Connected via %s — SOCKS5 127.0.0.1:%d", c.Name, socksPort))
 		})
 	}()
@@ -367,6 +401,20 @@ func (a *App) distinctProviders() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// indexOfLink returns the index of the config with the given link, or -1.
+// An empty link always returns -1.
+func indexOfLink(configs []model.Config, link string) int {
+	if link == "" {
+		return -1
+	}
+	for i := range configs {
+		if configs[i].Link == link {
+			return i
+		}
+	}
+	return -1
 }
 
 func (a *App) setStatus(s string) { a.status.SetText(s) }
