@@ -31,6 +31,7 @@ import (
 	"mahsang/internal/model"
 	"mahsang/internal/parser"
 	"mahsang/internal/provider"
+	"mahsang/internal/store"
 	"mahsang/internal/tester"
 	"mahsang/internal/tun"
 )
@@ -78,12 +79,21 @@ func New() *App {
 		if a.cancel != nil {
 			a.cancel() // stop an in-flight TEST ALL
 		}
+		a.persist() // catch-all; mutations also save as they happen
 		// Don't leave the system routed through a dead tunnel on exit.
 		_ = tun.Stop()
 		if a.tunnel != nil {
 			a.tunnel.Close()
 		}
 	})
+
+	// Restore the previous session's list (with ping results) so the app is
+	// usable immediately instead of starting empty.
+	if saved, err := store.Load(); err == nil && len(saved) > 0 {
+		a.all = saved
+		a.rebuildView()
+		a.setStatus(fmt.Sprintf("Loaded %d saved configs.", len(saved)))
+	}
 	return a
 }
 
@@ -264,6 +274,7 @@ func (a *App) onGetConfig() {
 			a.selected = -1
 			a.connected = indexOfLink(a.all, connectedLink)
 			a.setBusy(false)
+			a.persist()
 			if len(a.all) == 0 {
 				a.setStatus("No configs returned. Check provider/network.")
 			} else {
@@ -313,6 +324,7 @@ func (a *App) onAddClipboard() {
 	if added == 0 {
 		a.setStatus("No new configs added (duplicates or unsupported).")
 	} else {
+		a.persist()
 		a.setStatus(fmt.Sprintf("Added %d config(s) from clipboard.", added))
 	}
 }
@@ -349,6 +361,7 @@ func (a *App) onTest() {
 			cancel() // release the context now that all workers are done
 			a.cancel = nil
 			a.setBusy(false)
+			a.persist() // ping results are worth keeping across runs
 			a.setStatus(fmt.Sprintf("Tested %d configs. Press SORT.", total))
 		})
 	}()
@@ -382,6 +395,7 @@ func (a *App) onDeleteInvalid() {
 	if removed == 0 {
 		a.setStatus("No invalid configs to remove (run TEST ALL first).")
 	} else {
+		a.persist()
 		a.setStatus(fmt.Sprintf("Removed %d invalid config(s).", removed))
 	}
 }
@@ -532,3 +546,11 @@ func indexOfLink(configs []model.Config, link string) int {
 func (a *App) setStatus(s string) { a.status.SetText(s) }
 
 func (a *App) setBusy(b bool) { a.busy = b }
+
+// persist saves the current list best-effort; a failure only surfaces in the
+// status line and never blocks the action that triggered it.
+func (a *App) persist() {
+	if err := store.Save(a.all); err != nil {
+		a.setStatus("Warning: could not save configs: " + err.Error())
+	}
+}
