@@ -23,41 +23,65 @@ type Provider interface {
 	Fetch(ctx context.Context) ([]model.Config, error)
 }
 
+// Weighted is an optional interface: a provider's weight is how many configs it
+// contributes per round-robin round in Collect, so higher-weight (better)
+// providers make up a proportionally larger share of the capped selection.
+// Providers that don't implement it are treated as weight 1.
+type Weighted interface {
+	Weight() int
+}
+
+func weightOf(p Provider) int {
+	if w, ok := p.(Weighted); ok && w.Weight() > 0 {
+		return w.Weight()
+	}
+	return 1
+}
+
 // Collect fetches every provider, de-duplicates by link, and returns at most
 // limit configs interleaved round-robin across providers (so the result is a
 // spread of sources, not all from whichever provider returned first). Each
-// provider's list is shuffled first, so repeated calls return a random
-// selection rather than always the same head of the list. limit <= 0 means no
-// cap. Providers that error are skipped.
+// round, a provider contributes up to its Weight configs, so higher-weight
+// (better) providers make up a larger share of the result. Each provider's list
+// is shuffled first, so repeated calls return a random selection rather than
+// always the same head of the list. limit <= 0 means no cap. Providers that
+// error are skipped.
 func Collect(ctx context.Context, providers []Provider, limit int) []model.Config {
-	lists := make([][]model.Config, len(providers))
+	type source struct {
+		list   []model.Config
+		pos    int
+		weight int
+	}
+	sources := make([]source, len(providers))
 	for i, p := range providers {
+		s := source{weight: weightOf(p)}
 		if cs, err := p.Fetch(ctx); err == nil {
-			shuffled := make([]model.Config, len(cs))
-			copy(shuffled, cs)
-			rand.Shuffle(len(shuffled), func(a, b int) {
-				shuffled[a], shuffled[b] = shuffled[b], shuffled[a]
+			s.list = make([]model.Config, len(cs))
+			copy(s.list, cs)
+			rand.Shuffle(len(s.list), func(a, b int) {
+				s.list[a], s.list[b] = s.list[b], s.list[a]
 			})
-			lists[i] = shuffled
 		}
+		sources[i] = s
 	}
 	seen := make(map[string]struct{})
 	var out []model.Config
-	for col := 0; ; col++ {
+	for {
 		progressed := false
-		for _, l := range lists {
-			if col >= len(l) {
-				continue
-			}
-			progressed = true
-			c := l[col]
-			if _, dup := seen[c.Link]; dup {
-				continue
-			}
-			seen[c.Link] = struct{}{}
-			out = append(out, c)
-			if limit > 0 && len(out) >= limit {
-				return out
+		for i := range sources {
+			s := &sources[i]
+			for k := 0; k < s.weight && s.pos < len(s.list); k++ {
+				progressed = true
+				c := s.list[s.pos]
+				s.pos++
+				if _, dup := seen[c.Link]; dup {
+					continue
+				}
+				seen[c.Link] = struct{}{}
+				out = append(out, c)
+				if limit > 0 && len(out) >= limit {
+					return out
+				}
 			}
 		}
 		if !progressed {
@@ -74,18 +98,26 @@ func Collect(ctx context.Context, providers []Provider, limit int) []model.Confi
 type Subscription struct {
 	ProviderName string
 	URL          string
+	WeightVal    int // round-robin weight; <= 0 means 1
 	HTTP         *http.Client
 }
 
 func NewSubscription(name, url string) *Subscription {
+	return NewWeightedSubscription(name, url, 1)
+}
+
+func NewWeightedSubscription(name, url string, weight int) *Subscription {
 	return &Subscription{
 		ProviderName: name,
 		URL:          url,
+		WeightVal:    weight,
 		HTTP:         &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
 func (s *Subscription) Name() string { return s.ProviderName }
+
+func (s *Subscription) Weight() int { return s.WeightVal }
 
 func (s *Subscription) Fetch(ctx context.Context) ([]model.Config, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.URL, nil)

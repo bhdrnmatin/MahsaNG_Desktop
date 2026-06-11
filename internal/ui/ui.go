@@ -214,7 +214,30 @@ func (a *App) onGetConfig() {
 		ctx := context.Background()
 		fetched := provider.Collect(ctx, a.providers, maxServers)
 		fyne.Do(func() {
-			a.all = fetched
+			// Drop tested-and-failed configs, keep working + untested ones,
+			// then top up with newly fetched configs (deduped) up to the cap.
+			kept := make([]model.Config, 0, len(a.all))
+			seen := make(map[string]struct{})
+			for _, c := range a.all {
+				if c.PingMs == model.PingFailed {
+					continue
+				}
+				kept = append(kept, c)
+				seen[c.Link] = struct{}{}
+			}
+			added := 0
+			for _, c := range fetched {
+				if len(kept) >= maxServers {
+					break
+				}
+				if _, dup := seen[c.Link]; dup {
+					continue
+				}
+				kept = append(kept, c)
+				seen[c.Link] = struct{}{}
+				added++
+			}
+			a.all = kept
 			a.filter = ""
 			a.filterBtn.SetText("All")
 			a.rebuildView()
@@ -225,7 +248,7 @@ func (a *App) onGetConfig() {
 			if len(a.all) == 0 {
 				a.setStatus("No configs returned. Check provider/network.")
 			} else {
-				a.setStatus(fmt.Sprintf("Got %d configs. Press TEST.", len(a.all)))
+				a.setStatus(fmt.Sprintf("Added %d new, %d total. Press TEST ALL.", added, len(a.all)))
 			}
 		})
 	}()
