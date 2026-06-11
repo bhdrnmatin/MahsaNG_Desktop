@@ -125,7 +125,7 @@ func cmdConnect(ctx context.Context, link string) {
 	if err != nil {
 		fail(err)
 	}
-	const port = 10808
+	const port = 10809
 	tun, err := core.StartTunnel(c.Outbound, port)
 	if err != nil {
 		fail(err)

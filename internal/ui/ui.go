@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	socksPort  = 10808
+	socksPort  = 10809
 	maxServers = 20 // GET CONFIG caps the list to this many, spread across providers
 )
 
