@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync"
 	"testing"
 
 	"mahsang/internal/model"
@@ -73,4 +74,65 @@ func names(cs []model.Config) []string {
 		out[i] = c.Name
 	}
 	return out
+}
+
+// TestTestAllRetriesPreviouslyGood stubs the prober so every call fails, and
+// checks the retry policy: a config with a previous real ping is probed
+// twice, while untested / previously-failed ones are probed once.
+func TestTestAllRetriesPreviouslyGood(t *testing.T) {
+	orig := probe
+	defer func() { probe = orig }()
+
+	var mu sync.Mutex
+	calls := map[string]int{}
+	probe = func(_ context.Context, outbound []byte) int64 {
+		mu.Lock()
+		calls[string(outbound)]++
+		mu.Unlock()
+		return model.PingFailed
+	}
+
+	configs := []model.Config{
+		{Name: "was-good", Outbound: []byte("good"), PingMs: 300},
+		{Name: "untested", Outbound: []byte("new"), PingMs: model.PingUntested},
+		{Name: "was-dead", Outbound: []byte("dead"), PingMs: model.PingFailed},
+	}
+	TestAll(context.Background(), configs, nil)
+
+	if calls["good"] != 2 {
+		t.Fatalf("previously-good config probed %d times, want 2", calls["good"])
+	}
+	if calls["new"] != 1 || calls["dead"] != 1 {
+		t.Fatalf("untested/failed configs probed %d/%d times, want 1/1", calls["new"], calls["dead"])
+	}
+	for _, c := range configs {
+		if c.PingMs != model.PingFailed {
+			t.Fatalf("%s: PingMs = %d, want PingFailed", c.Name, c.PingMs)
+		}
+	}
+}
+
+// TestTestAllRetrySucceeds: the second sample's result must win.
+func TestTestAllRetrySucceeds(t *testing.T) {
+	orig := probe
+	defer func() { probe = orig }()
+
+	var mu sync.Mutex
+	n := 0
+	probe = func(context.Context, []byte) int64 {
+		mu.Lock()
+		defer mu.Unlock()
+		n++
+		if n == 1 {
+			return model.PingFailed // transient failure
+		}
+		return 280
+	}
+
+	configs := []model.Config{{Name: "flaky", Outbound: []byte("x"), PingMs: 300}}
+	TestAll(context.Background(), configs, nil)
+
+	if configs[0].PingMs != 280 {
+		t.Fatalf("PingMs = %d, want 280 (retry result)", configs[0].PingMs)
+	}
 }

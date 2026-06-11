@@ -32,6 +32,16 @@ type Result struct {
 	PingMs int64
 }
 
+// probe measures one config, mapping errors to PingFailed. A variable so
+// tests can stub out the real xray-core round trip.
+var probe = func(ctx context.Context, outbound []byte) int64 {
+	ping, err := core.MeasureDelay(ctx, outbound, probeTimeout)
+	if err != nil {
+		return model.PingFailed
+	}
+	return ping
+}
+
 // TestAll measures every config's latency using a worker pool. It writes the
 // result back into each config's PingMs and, if onResult is non-nil, calls it
 // as each measurement completes. Respects ctx cancellation.
@@ -44,9 +54,13 @@ func TestAll(ctx context.Context, configs []model.Config, onResult func(Result))
 		go func() {
 			defer wg.Done()
 			for i := range jobs {
-				ping, err := core.MeasureDelay(ctx, configs[i].Outbound, probeTimeout)
-				if err != nil {
-					ping = model.PingFailed
+				ping := probe(ctx, configs[i].Outbound)
+				// One failed sample on a server that worked before is
+				// usually probe noise (overload, probabilistic filtering),
+				// not death: give previously-good servers a second chance
+				// before flipping them to failed.
+				if ping == model.PingFailed && configs[i].PingMs >= 0 && ctx.Err() == nil {
+					ping = probe(ctx, configs[i].Outbound)
 				}
 				configs[i].PingMs = ping
 				if onResult != nil {
