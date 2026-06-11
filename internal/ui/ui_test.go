@@ -55,6 +55,34 @@ func TestRowUpdateConnectedMarker(t *testing.T) {
 	}
 }
 
+// TestOnDeleteInvalid reproduces the crash where the list refreshed against a
+// stale view after a.all shrank: it must remove failed configs without panic.
+func TestOnDeleteInvalid(t *testing.T) {
+	a := &App{connected: -1, selected: -1}
+	a.all = []model.Config{
+		{Name: "good", Link: "l0", Provider: "P", Protocol: "VLESS", PingMs: 120},
+		{Name: "dead", Link: "l1", Provider: "P", Protocol: "VMESS", PingMs: model.PingFailed},
+		{Name: "fresh", Link: "l2", Provider: "P", Protocol: "TROJAN", PingMs: model.PingUntested},
+	}
+	a.view = []int{0, 1, 2}
+	a.status = widget.NewLabel("")
+	a.list = widget.NewList(a.rowCount, a.rowTemplate, a.rowUpdate)
+
+	a.onDeleteInvalid() // must not panic
+
+	if len(a.all) != 2 {
+		t.Fatalf("expected 2 configs after removing 1 failed, got %d", len(a.all))
+	}
+	for _, c := range a.all {
+		if c.PingMs == model.PingFailed {
+			t.Fatalf("a failed config survived: %q", c.Name)
+		}
+	}
+	if len(a.view) != 2 {
+		t.Fatalf("view out of sync with all: view=%d all=%d", len(a.view), len(a.all))
+	}
+}
+
 func TestIndexOfLink(t *testing.T) {
 	cfgs := []model.Config{{Link: "a"}, {Link: "b"}}
 	if got := indexOfLink(cfgs, "b"); got != 1 {

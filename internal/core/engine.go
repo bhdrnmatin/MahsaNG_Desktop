@@ -85,26 +85,37 @@ func buildInstance(outboundJSON []byte, extra map[string]any) (*xcore.Instance, 
 	return inst, nil
 }
 
-// Tunnel is a running xray instance exposing a local SOCKS5 (and HTTP) proxy
-// that routes traffic through the chosen server. This is the M1 "CONNECT":
-// apps/browser point at 127.0.0.1:<port>. (M2 will add system-wide TUN.)
+// Tunnel is a running xray instance exposing a local SOCKS5 and HTTP proxy that
+// routes traffic through the chosen server. Apps/browser point at
+// 127.0.0.1:SocksPort (or HTTPPort); the system proxy and the TUN both feed off
+// these local listeners.
 type Tunnel struct {
-	inst    *xcore.Instance
+	inst      *xcore.Instance
 	SocksPort int
+	HTTPPort  int
 }
 
-// StartTunnel builds and starts an instance with a local SOCKS+HTTP inbound on
-// 127.0.0.1:socksPort feeding the given outbound. Call Close to stop it.
+// StartTunnel builds and starts an instance with a local SOCKS inbound on
+// 127.0.0.1:socksPort and an HTTP inbound on socksPort+1, both feeding the given
+// outbound. Call Close to stop it.
 func StartTunnel(outboundJSON []byte, socksPort int) (*Tunnel, error) {
+	httpPort := socksPort + 1
+	sniffing := map[string]any{"enabled": true, "destOverride": []any{"http", "tls"}}
 	extra := map[string]any{
-		"inbounds": []any{map[string]any{
-			"tag":      "socks-in",
-			"listen":   "127.0.0.1",
-			"port":     socksPort,
-			"protocol": "socks",
-			"settings": map[string]any{"udp": true, "auth": "noauth"},
-			"sniffing": map[string]any{"enabled": true, "destOverride": []any{"http", "tls"}},
-		}},
+		"inbounds": []any{
+			map[string]any{
+				"tag": "socks-in", "listen": "127.0.0.1", "port": socksPort,
+				"protocol": "socks",
+				"settings": map[string]any{"udp": true, "auth": "noauth"},
+				"sniffing": sniffing,
+			},
+			map[string]any{
+				"tag": "http-in", "listen": "127.0.0.1", "port": httpPort,
+				"protocol": "http",
+				"settings": map[string]any{},
+				"sniffing": sniffing,
+			},
+		},
 	}
 	inst, err := buildInstance(outboundJSON, extra)
 	if err != nil {
@@ -113,7 +124,7 @@ func StartTunnel(outboundJSON []byte, socksPort int) (*Tunnel, error) {
 	if err := inst.Start(); err != nil {
 		return nil, fmt.Errorf("start tunnel: %w", err)
 	}
-	return &Tunnel{inst: inst, SocksPort: socksPort}, nil
+	return &Tunnel{inst: inst, SocksPort: socksPort, HTTPPort: httpPort}, nil
 }
 
 // Close stops the tunnel and releases the local port.

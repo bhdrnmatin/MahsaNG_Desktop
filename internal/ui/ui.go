@@ -13,6 +13,8 @@ import (
 	"context"
 	"fmt"
 	"image/color"
+	"net"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -30,6 +32,7 @@ import (
 	"mahsang/internal/parser"
 	"mahsang/internal/provider"
 	"mahsang/internal/tester"
+	"mahsang/internal/tun"
 )
 
 const (
@@ -73,6 +76,8 @@ func New() *App {
 	a.win.Resize(fyne.NewSize(560, 760))
 	a.win.SetContent(a.buildContent())
 	a.win.SetOnClosed(func() {
+		// Don't leave the system routed through a dead tunnel on exit.
+		_ = tun.Stop()
 		if a.tunnel != nil {
 			a.tunnel.Close()
 		}
@@ -150,6 +155,9 @@ func (a *App) rowUpdate(id widget.ListItemID, obj fyne.CanvasObject) {
 		return
 	}
 	gi := a.view[id]
+	if gi < 0 || gi >= len(a.all) {
+		return // view briefly out of sync with all; next Refresh fixes it
+	}
 	c := a.all[gi]
 
 	row := obj.(*fyne.Container)
@@ -354,8 +362,8 @@ func (a *App) onDeleteInvalid() {
 	a.all = kept
 	a.connected = indexOfLink(a.all, connectedLink)
 	a.selected = -1
+	a.rebuildView() // resync a.view to the new a.all BEFORE any refresh
 	a.list.UnselectAll()
-	a.rebuildView()
 	if removed == 0 {
 		a.setStatus("No invalid configs to remove (run TEST ALL first).")
 	} else {
@@ -439,8 +447,12 @@ func (a *App) onSpeedTest() {
 	}()
 }
 
+// onConnectToggle connects/disconnects. Connecting starts the tunnel and then
+// brings up system-wide TUN routing, so ALL OS traffic goes through the selected
+// server. This needs root (creating a TUN device + editing the route table).
 func (a *App) onConnectToggle() {
 	if a.tunnel != nil {
+		_ = tun.Stop() // restore routing before the proxy dies
 		a.tunnel.Close()
 		a.tunnel = nil
 		a.connected = -1
@@ -453,21 +465,38 @@ func (a *App) onConnectToggle() {
 		a.setStatus("Select a config first, then Connect.")
 		return
 	}
+	if os.Geteuid() != 0 {
+		a.setStatus("System-wide connect needs root — launch the app with sudo.")
+		return
+	}
 	target := a.selected
 	c := a.all[target]
 	a.setStatus("Connecting…")
 	go func() {
 		t, err := core.StartTunnel(c.Outbound, socksPort)
-		fyne.Do(func() {
-			if err != nil {
-				a.setStatus("Connect failed: " + err.Error())
-				return
+		if err != nil {
+			fyne.Do(func() { a.setStatus("Connect failed: " + err.Error()) })
+			return
+		}
+		// Resolve the server's IP(s) (before TUN takes over DNS) to exclude
+		// them from the tunnel and avoid a routing loop.
+		var ips []string
+		if host, e := core.OutboundServer(c.Outbound); e == nil {
+			if addrs, e := net.LookupHost(host); e == nil {
+				ips = addrs
 			}
+		}
+		if err := tun.Start(fmt.Sprintf("127.0.0.1:%d", t.SocksPort), ips); err != nil {
+			t.Close() // roll back; connect is all-or-nothing (whole system)
+			fyne.Do(func() { a.setStatus("Connect failed (TUN routing): " + err.Error()) })
+			return
+		}
+		fyne.Do(func() {
 			a.tunnel = t
 			a.connected = target
 			a.connBtn.SetText("Disconnect")
 			a.list.Refresh()
-			a.setStatus(fmt.Sprintf("Connected via %s — SOCKS5 127.0.0.1:%d", c.Name, socksPort))
+			a.setStatus(fmt.Sprintf("Connected (system-wide) via %s.", c.Name))
 		})
 	}()
 }
