@@ -15,6 +15,7 @@ import (
 	"image/color"
 	"sort"
 	"strings"
+	"time"
 
 	fyne "fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -100,15 +101,18 @@ func (a *App) buildContent() fyne.CanvasObject {
 	a.list.OnUnselected = func(widget.ListItemID) { a.selected = -1 }
 
 	getBtn := widget.NewButton("GET CONFIG", a.onGetConfig)
-	testBtn := widget.NewButton("TEST", a.onTest)
+	testBtn := widget.NewButton("TEST ALL", a.onTest)
 	sortBtn := widget.NewButton("SORT", a.onSort)
 	a.filterBtn = widget.NewButton("All", a.onCycleFilter)
 	buttons := container.NewGridWithColumns(4, getBtn, testBtn, sortBtn, a.filterBtn)
 
 	a.connBtn = widget.NewButton("Connect", a.onConnectToggle)
 	a.connBtn.Importance = widget.HighImportance
+	speedBtn := widget.NewButton("Speed Test", a.onSpeedTest)
+	delBtn := widget.NewButton("Delete Invalid", a.onDeleteInvalid)
+	actionRow := container.NewGridWithColumns(3, a.connBtn, speedBtn, delBtn)
 	a.status = widget.NewLabel("Ready. Press GET CONFIG.")
-	bottom := container.NewVBox(buttons, a.connBtn, a.status)
+	bottom := container.NewVBox(buttons, actionRow, a.status)
 
 	return container.NewBorder(top, bottom, nil, nil, a.list)
 }
@@ -176,9 +180,12 @@ func (a *App) rowUpdate(id widget.ListItemID, obj fyne.CanvasObject) {
 }
 
 func pingLabel(ms int64) (string, color.Color) {
+	red := color.NRGBA{R: 0xef, G: 0x44, B: 0x44, A: 0xff}
 	switch {
-	case ms < 0:
+	case ms == model.PingUntested:
 		return "—", color.Gray{Y: 0x88}
+	case ms < 0: // PingFailed: tested but no result
+		return "-1ms", red
 	case ms < 800:
 		return fmt.Sprintf("%dms", ms), color.NRGBA{R: 0x22, G: 0xc5, B: 0x5e, A: 0xff} // green
 	case ms < 2000:
@@ -301,6 +308,38 @@ func (a *App) onTest() {
 	}()
 }
 
+// onDeleteInvalid removes configs that were tested and returned no result
+// (PingMs == PingFailed). Untested configs are kept. The connected server's
+// green marker is preserved by re-mapping its index.
+func (a *App) onDeleteInvalid() {
+	if a.busy {
+		return
+	}
+	connectedLink := ""
+	if a.connected >= 0 {
+		connectedLink = a.all[a.connected].Link
+	}
+	kept := make([]model.Config, 0, len(a.all))
+	removed := 0
+	for _, c := range a.all {
+		if c.PingMs == model.PingFailed {
+			removed++
+			continue
+		}
+		kept = append(kept, c)
+	}
+	a.all = kept
+	a.connected = indexOfLink(a.all, connectedLink)
+	a.selected = -1
+	a.list.UnselectAll()
+	a.rebuildView()
+	if removed == 0 {
+		a.setStatus("No invalid configs to remove (run TEST ALL first).")
+	} else {
+		a.setStatus(fmt.Sprintf("Removed %d invalid config(s).", removed))
+	}
+}
+
 func (a *App) onSort() {
 	if a.busy {
 		return
@@ -343,6 +382,38 @@ func (a *App) onCycleFilter() {
 	a.list.UnselectAll()
 	a.selected = -1
 	a.rebuildView()
+}
+
+// onSpeedTest measures download throughput through the selected config (or the
+// connected one if nothing is selected) — a single-server check, not the whole
+// list. Result is shown in the status line.
+func (a *App) onSpeedTest() {
+	if a.busy {
+		return
+	}
+	target := a.selected
+	if target < 0 {
+		target = a.connected
+	}
+	if target < 0 {
+		a.setStatus("Select a config first, then Speed Test.")
+		return
+	}
+	c := a.all[target]
+	a.setBusy(true)
+	a.setStatus("Speed testing " + c.Name + " …")
+	go func() {
+		mbps, n, err := core.MeasureSpeed(context.Background(), c.Outbound, 10*time.Second)
+		fyne.Do(func() {
+			a.setBusy(false)
+			if err != nil {
+				a.setStatus("Speed test failed: " + err.Error())
+				return
+			}
+			a.setStatus(fmt.Sprintf("Speed: %.1f Mbps (%.1f MB downloaded) — %s",
+				mbps, float64(n)/(1<<20), c.Name))
+		})
+	}()
 }
 
 func (a *App) onConnectToggle() {

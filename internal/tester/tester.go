@@ -44,7 +44,7 @@ func TestAll(ctx context.Context, configs []model.Config, onResult func(Result))
 			for i := range jobs {
 				ping, err := core.MeasureDelay(ctx, configs[i].Outbound, probeTimeout)
 				if err != nil {
-					ping = -1
+					ping = model.PingFailed
 				}
 				configs[i].PingMs = ping
 				if onResult != nil {

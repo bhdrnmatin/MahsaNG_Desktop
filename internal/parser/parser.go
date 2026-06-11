@@ -249,7 +249,7 @@ func finish(link, name, proto string, ob map[string]any) (model.Config, error) {
 	}
 	return model.Config{
 		Link: link, Name: strings.TrimSpace(name), Protocol: proto,
-		Outbound: js, PingMs: -1,
+		Outbound: js, PingMs: model.PingUntested,
 	}, nil
 }
 
