@@ -10,8 +10,10 @@ package core
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"time"
@@ -67,10 +69,8 @@ func buildInstance(outboundJSON []byte, extra map[string]any) (*xcore.Instance, 
 		"log":       map[string]any{"loglevel": "none"},
 		"outbounds": []any{mustObject(outboundJSON)},
 	}
-	for k, v := range extra {
-		full[k] = v
-	}
-	cfgBytes, err := jsonMarshal(full)
+	maps.Copy(full, extra)
+	cfgBytes, err := json.Marshal(full)
 	if err != nil {
 		return nil, err
 	}
@@ -81,6 +81,19 @@ func buildInstance(outboundJSON []byte, extra map[string]any) (*xcore.Instance, 
 	inst, err := xcore.New(pbConfig)
 	if err != nil {
 		return nil, fmt.Errorf("new instance: %w", err)
+	}
+	return inst, nil
+}
+
+// startMeasureInstance builds and starts a throwaway instance for the given
+// outbound, used by the delay and speed probes. The caller must Close it.
+func startMeasureInstance(outboundJSON []byte) (*xcore.Instance, error) {
+	inst, err := buildInstance(outboundJSON, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := inst.Start(); err != nil {
+		return nil, fmt.Errorf("start: %w", err)
 	}
 	return inst, nil
 }
@@ -139,12 +152,9 @@ func (t *Tunnel) Close() error {
 // HTTP request to the probe URL routed through it. Returns latency in
 // milliseconds, or an error if the server is unreachable within timeout.
 func MeasureDelay(ctx context.Context, outboundJSON []byte, timeout time.Duration) (int64, error) {
-	inst, err := buildInstance(outboundJSON, nil)
+	inst, err := startMeasureInstance(outboundJSON)
 	if err != nil {
 		return -1, err
-	}
-	if err := inst.Start(); err != nil {
-		return -1, fmt.Errorf("start: %w", err)
 	}
 	defer inst.Close()
 
@@ -160,6 +170,12 @@ func MeasureDelay(ctx context.Context, outboundJSON []byte, timeout time.Duratio
 		return -1, err
 	}
 	defer resp.Body.Close()
+	// Only a 204 (or 200 from a tolerant mirror) proves we reached the real
+	// probe; anything else is a captive portal / block page masquerading as
+	// connectivity.
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		return -1, fmt.Errorf("probe returned http %d", resp.StatusCode)
+	}
 	return time.Since(start).Milliseconds(), nil
 }
 
@@ -170,12 +186,9 @@ func MeasureDelay(ctx context.Context, outboundJSON []byte, timeout time.Duratio
 // is used to compute the rate, so a slow link still yields a result rather than
 // hanging.
 func MeasureSpeed(ctx context.Context, outboundJSON []byte, window time.Duration) (mbps float64, bytes int64, err error) {
-	inst, err := buildInstance(outboundJSON, nil)
+	inst, err := startMeasureInstance(outboundJSON)
 	if err != nil {
 		return 0, 0, err
-	}
-	if err := inst.Start(); err != nil {
-		return 0, 0, fmt.Errorf("start: %w", err)
 	}
 	defer inst.Close()
 

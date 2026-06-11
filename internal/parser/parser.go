@@ -296,15 +296,19 @@ func orDefault(v, def string) string {
 }
 
 func splitColon(s string) (a, b string) {
-	if i := strings.Index(s, ":"); i >= 0 {
-		return s[:i], s[i+1:]
-	}
-	return s, ""
+	a, b, _ = strings.Cut(s, ":")
+	return a, b
 }
 
+// splitHostPort handles both "host:port" and bracketed IPv6 "[::1]:port"
+// (splitting on the last colon, so colons inside the address are kept).
 func splitHostPort(s string) (string, int) {
-	host, port := splitColon(s)
-	return host, toInt(port)
+	i := strings.LastIndex(s, ":")
+	if i < 0 {
+		return s, 0
+	}
+	host := strings.TrimSuffix(strings.TrimPrefix(s[:i], "["), "]")
+	return host, toInt(s[i+1:])
 }
 
 func splitAlpn(s string) []any {
@@ -312,7 +316,7 @@ func splitAlpn(s string) []any {
 		return nil
 	}
 	var out []any
-	for _, p := range strings.Split(s, ",") {
+	for p := range strings.SplitSeq(s, ",") {
 		if p = strings.TrimSpace(p); p != "" {
 			out = append(out, p)
 		}

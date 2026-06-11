@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"mahsang/internal/model"
@@ -38,14 +39,14 @@ func weightOf(p Provider) int {
 	return 1
 }
 
-// Collect fetches every provider, de-duplicates by link, and returns at most
-// limit configs interleaved round-robin across providers (so the result is a
-// spread of sources, not all from whichever provider returned first). Each
-// round, a provider contributes up to its Weight configs, so higher-weight
-// (better) providers make up a larger share of the result. Each provider's list
-// is shuffled first, so repeated calls return a random selection rather than
-// always the same head of the list. limit <= 0 means no cap. Providers that
-// error are skipped.
+// Collect fetches every provider concurrently, de-duplicates by link, and
+// returns at most limit configs interleaved round-robin across providers (so
+// the result is a spread of sources, not all from whichever provider returned
+// first). Each round, a provider contributes up to its Weight configs, so
+// higher-weight (better) providers make up a larger share of the result. Each
+// provider's list is shuffled first, so repeated calls return a random
+// selection rather than always the same head of the list. limit <= 0 means no
+// cap. Providers that error are skipped.
 func Collect(ctx context.Context, providers []Provider, limit int) []model.Config {
 	type source struct {
 		list   []model.Config
@@ -53,17 +54,23 @@ func Collect(ctx context.Context, providers []Provider, limit int) []model.Confi
 		weight int
 	}
 	sources := make([]source, len(providers))
+	var wg sync.WaitGroup
 	for i, p := range providers {
-		s := source{weight: weightOf(p)}
-		if cs, err := p.Fetch(ctx); err == nil {
-			s.list = make([]model.Config, len(cs))
-			copy(s.list, cs)
-			rand.Shuffle(len(s.list), func(a, b int) {
-				s.list[a], s.list[b] = s.list[b], s.list[a]
-			})
-		}
-		sources[i] = s
+		wg.Add(1)
+		go func(i int, p Provider) {
+			defer wg.Done()
+			s := source{weight: weightOf(p)}
+			if cs, err := p.Fetch(ctx); err == nil {
+				s.list = make([]model.Config, len(cs))
+				copy(s.list, cs)
+				rand.Shuffle(len(s.list), func(a, b int) {
+					s.list[a], s.list[b] = s.list[b], s.list[a]
+				})
+			}
+			sources[i] = s
+		}(i, p)
 	}
+	wg.Wait()
 	seen := make(map[string]struct{})
 	var out []model.Config
 	for {

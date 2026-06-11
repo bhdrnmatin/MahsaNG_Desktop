@@ -10,7 +10,3 @@ func mustObject(b []byte) any {
 	_ = json.Unmarshal(b, &v)
 	return v
 }
-
-func jsonMarshal(v any) ([]byte, error) {
-	return json.Marshal(v)
-}

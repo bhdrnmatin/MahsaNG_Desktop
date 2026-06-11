@@ -58,9 +58,9 @@ type App struct {
 	selected  int    // index into all, or -1
 	connected int    // index into all of the connected config, or -1
 
-	tunnel  *core.Tunnel
-	busy    bool // a fetch/test is running
-	cancel  context.CancelFunc
+	tunnel *core.Tunnel
+	busy   bool // a fetch/test is running
+	cancel context.CancelFunc
 }
 
 // New builds the application and its window.
@@ -75,6 +75,9 @@ func New() *App {
 	a.win.Resize(fyne.NewSize(560, 760))
 	a.win.SetContent(a.buildContent())
 	a.win.SetOnClosed(func() {
+		if a.cancel != nil {
+			a.cancel() // stop an in-flight TEST ALL
+		}
 		// Don't leave the system routed through a dead tunnel on exit.
 		_ = tun.Stop()
 		if a.tunnel != nil {
@@ -263,6 +266,9 @@ func (a *App) onGetConfig() {
 // subscription blob (handled by provider.ExtractLinks). Duplicates of configs
 // already in the list are skipped.
 func (a *App) onAddClipboard() {
+	if a.busy {
+		return // a running TEST ALL holds index snapshots into a.all
+	}
 	text := a.fyneApp.Clipboard().Content()
 	if strings.TrimSpace(text) == "" {
 		a.setStatus("Clipboard is empty.")
@@ -328,6 +334,7 @@ func (a *App) onTest() {
 			})
 		})
 		fyne.Do(func() {
+			cancel() // release the context now that all workers are done
 			a.cancel = nil
 			a.setBusy(false)
 			a.setStatus(fmt.Sprintf("Tested %d configs. Press SORT.", total))
@@ -433,6 +440,9 @@ func (a *App) onConnectToggle() {
 		a.setStatus("Disconnected.")
 		return
 	}
+	if a.busy {
+		return // a connect attempt or test is already in flight
+	}
 	if a.selected < 0 {
 		a.setStatus("Select a config first, then Connect.")
 		return
@@ -443,11 +453,15 @@ func (a *App) onConnectToggle() {
 	}
 	target := a.selected
 	c := a.all[target]
+	a.setBusy(true)
 	a.setStatus("Connecting…")
 	go func() {
 		t, err := core.StartTunnel(c.Outbound, socksPort)
 		if err != nil {
-			fyne.Do(func() { a.setStatus("Connect failed: " + err.Error()) })
+			fyne.Do(func() {
+				a.setBusy(false)
+				a.setStatus("Connect failed: " + err.Error())
+			})
 			return
 		}
 		// Resolve the server's IP(s) (before TUN takes over DNS) to exclude
@@ -460,7 +474,10 @@ func (a *App) onConnectToggle() {
 		}
 		if err := tun.Start(fmt.Sprintf("127.0.0.1:%d", t.SocksPort), ips); err != nil {
 			t.Close() // roll back; connect is all-or-nothing (whole system)
-			fyne.Do(func() { a.setStatus("Connect failed (TUN routing): " + err.Error()) })
+			fyne.Do(func() {
+				a.setBusy(false)
+				a.setStatus("Connect failed (TUN routing): " + err.Error())
+			})
 			return
 		}
 		fyne.Do(func() {
@@ -468,6 +485,7 @@ func (a *App) onConnectToggle() {
 			a.connected = target
 			a.connBtn.SetText("Disconnect")
 			a.list.Refresh()
+			a.setBusy(false)
 			a.setStatus(fmt.Sprintf("Connected (system-wide) via %s.", c.Name))
 		})
 	}()

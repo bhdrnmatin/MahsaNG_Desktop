@@ -7,6 +7,8 @@
 //	mahsang-cli get                 # fetch from built-in providers, list configs
 //	mahsang-cli test <subURL|->     # fetch a subscription URL, ping all, sorted
 //	mahsang-cli ping <share-link>   # measure one link
+//	mahsang-cli connect <link>      # start a local SOCKS tunnel, verify egress IP
+//	mahsang-cli speed <link>        # download throughput through one link
 package main
 
 import (
@@ -31,7 +33,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("usage: mahsang-cli <get|test|ping> [arg]")
+		fmt.Println("usage: mahsang-cli <get|test|ping|connect|speed> [arg]")
 		os.Exit(2)
 	}
 	ctx := context.Background()
@@ -81,7 +83,7 @@ func cmdTest(ctx context.Context, src, limit string) {
 	if n, _ := strconv.Atoi(limit); n > 0 && n < len(configs) {
 		configs = configs[:n]
 	}
-	fmt.Printf("Testing %d configs (10 workers)...\n", len(configs))
+	fmt.Printf("Testing %d configs...\n", len(configs))
 	done := 0
 	tester.TestAll(ctx, configs, func(r tester.Result) {
 		done++

@@ -8,6 +8,14 @@ import (
 	"strings"
 )
 
+// Routing state saved by configureRoutes for restoreRoutes (guarded by the
+// package mutex in tun.go).
+var (
+	savedGW   string   // original default gateway, for restore
+	savedDev  string   // original default interface
+	hostRoute []string // per-server host routes we added, for cleanup
+)
+
 // configureRoutes assigns the TUN an address, excludes each server IP via the
 // original gateway, then overrides the default route with the TUN using the
 // 0/1 + 128/1 split (which beats the existing default without deleting it).

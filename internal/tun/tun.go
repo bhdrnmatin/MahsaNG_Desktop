@@ -22,11 +22,8 @@ const (
 )
 
 var (
-	mu        sync.Mutex
-	running   bool
-	savedGW   string   // original default gateway, for restore
-	savedDev  string   // original default interface
-	hostRoute []string // per-server host routes we added, for cleanup
+	mu      sync.Mutex
+	running bool
 )
 
 // Start brings up the TUN, points tun2socks at socksAddr (host:port), excludes
