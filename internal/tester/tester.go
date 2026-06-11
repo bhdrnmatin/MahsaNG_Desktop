@@ -13,8 +13,14 @@ import (
 )
 
 const (
-	workers       = 10
-	probeTimeout  = 10 * time.Second
+	// Each test is almost entirely network wait (build an instance, then one
+	// HTTPS request through it), so high concurrency is cheap and dominates
+	// total time. With 40 workers a 100-config batch runs in ~3 waves.
+	workers = 40
+	// Dead/unreachable configs are the main time sink: they block until this
+	// timeout. Kept short so failures give up quickly; live servers reaching
+	// the probe through a proxy almost always answer well under 5s.
+	probeTimeout = 5 * time.Second
 )
 
 // Result reports the outcome of testing one config (by its index in the slice
