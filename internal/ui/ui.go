@@ -50,12 +50,11 @@ type App struct {
 	all  []model.Config // master list
 	view []int          // indices into all, in display order
 
-	list     *widget.List
-	status   *widget.Label
-	filterBtn *widget.Button
-	connBtn  *widget.Button
+	list    *widget.List
+	status  *widget.Label
+	connBtn *widget.Button
 
-	filter    string // "" = All, otherwise a provider name
+	filter    string // "" = all providers (reserved; no UI filter currently)
 	selected  int    // index into all, or -1
 	connected int    // index into all of the connected config, or -1
 
@@ -108,14 +107,13 @@ func (a *App) buildContent() fyne.CanvasObject {
 	getBtn := widget.NewButton("GET CONFIG", a.onGetConfig)
 	testBtn := widget.NewButton("TEST ALL", a.onTest)
 	sortBtn := widget.NewButton("SORT", a.onSort)
-	a.filterBtn = widget.NewButton("All", a.onCycleFilter)
-	buttons := container.NewGridWithColumns(4, getBtn, testBtn, sortBtn, a.filterBtn)
+	delBtn := widget.NewButton("Delete Invalid", a.onDeleteInvalid)
+	buttons := container.NewGridWithColumns(4, getBtn, testBtn, sortBtn, delBtn)
 
 	a.connBtn = widget.NewButton("Connect", a.onConnectToggle)
 	a.connBtn.Importance = widget.HighImportance
 	speedBtn := widget.NewButton("Speed Test", a.onSpeedTest)
-	delBtn := widget.NewButton("Delete Invalid", a.onDeleteInvalid)
-	actionRow := container.NewGridWithColumns(3, a.connBtn, speedBtn, delBtn)
+	actionRow := container.NewGridWithColumns(2, a.connBtn, speedBtn)
 	a.status = widget.NewLabel("Ready. Press GET CONFIG.")
 	bottom := container.NewVBox(buttons, actionRow, a.status)
 
@@ -246,8 +244,6 @@ func (a *App) onGetConfig() {
 				added++
 			}
 			a.all = kept
-			a.filter = ""
-			a.filterBtn.SetText("All")
 			a.rebuildView()
 			a.list.UnselectAll()
 			a.selected = -1
@@ -391,30 +387,6 @@ func (a *App) onSort() {
 	a.setStatus("Sorted by ping (fastest first).")
 }
 
-func (a *App) onCycleFilter() {
-	if a.busy {
-		return
-	}
-	options := append([]string{""}, a.distinctProviders()...)
-	// find current and advance
-	cur := 0
-	for i, o := range options {
-		if o == a.filter {
-			cur = i
-			break
-		}
-	}
-	a.filter = options[(cur+1)%len(options)]
-	if a.filter == "" {
-		a.filterBtn.SetText("All")
-	} else {
-		a.filterBtn.SetText(a.filter)
-	}
-	a.list.UnselectAll()
-	a.selected = -1
-	a.rebuildView()
-}
-
 // onSpeedTest measures download throughput through the selected config (or the
 // connected one if nothing is selected) — a single-server check, not the whole
 // list. Result is shown in the status line.
@@ -511,19 +483,6 @@ func (a *App) rebuildView() {
 		}
 	}
 	a.list.Refresh()
-}
-
-func (a *App) distinctProviders() []string {
-	seen := map[string]struct{}{}
-	var out []string
-	for _, c := range a.all {
-		if _, ok := seen[c.Provider]; !ok && c.Provider != "" {
-			seen[c.Provider] = struct{}{}
-			out = append(out, c.Provider)
-		}
-	}
-	sort.Strings(out)
-	return out
 }
 
 // indexOfLink returns the index of the config with the given link, or -1.
