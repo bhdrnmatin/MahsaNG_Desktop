@@ -1,0 +1,86 @@
+# Builds release binaries for Linux, Windows and macOS whenever a v* tag is
+# pushed, and attaches them to a GitHub Release. Fyne needs cgo, so each
+# platform is built natively on its own runner — users then just download
+# and run, no build step.
+#
+# Release flow:  git tag v0.1.0 && git push --tags
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: # manual run for testing (builds, but only tags get a Release)
+
+permissions:
+  contents: write # create the Release and upload assets
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: mahsang-linux-amd64.tar.gz
+          - os: windows-latest
+            asset: mahsang-windows-amd64.zip
+          - os: macos-latest # Apple Silicon (arm64)
+            asset: mahsang-macos-arm64.tar.gz
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Fyne build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev libxkbcommon-dev
+
+      - name: Build (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: go build -trimpath -ldflags="-s -w" -o mahsang ./cmd/mahsang
+
+      # -H windowsgui keeps a console window from opening behind the GUI.
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: go build -trimpath -ldflags="-s -w -H windowsgui" -o mahsang.exe ./cmd/mahsang
+
+      - name: Package (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: tar -czf "${{ matrix.asset }}" mahsang
+
+      # The TUN device on Windows needs wintun.dll next to the exe, so the
+      # Windows asset is a zip of both (redistribution is permitted by the
+      # Wintun prebuilt-binaries license).
+      - name: Package with wintun.dll (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://www.wintun.net/builds/wintun-0.14.1.zip -OutFile wintun.zip
+          Expand-Archive wintun.zip -DestinationPath wintun-extract
+          Copy-Item wintun-extract/wintun/bin/amd64/wintun.dll .
+          Compress-Archive -Path mahsang.exe, wintun.dll -DestinationPath "${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            mahsang-*.tar.gz
+            mahsang-*.zip
