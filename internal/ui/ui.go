@@ -14,16 +14,19 @@ import (
 	"fmt"
 	"image/color"
 	"sort"
+	"strings"
 
 	fyne "fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"mahsang/internal/core"
 	"mahsang/internal/model"
+	"mahsang/internal/parser"
 	"mahsang/internal/provider"
 	"mahsang/internal/tester"
 )
@@ -83,7 +86,8 @@ func (a *App) buildContent() fyne.CanvasObject {
 	title := canvas.NewText("MahsaNG", color.NRGBA{R: 0x2e, G: 0xb8, B: 0x72, A: 0xff})
 	title.TextSize = 20
 	title.TextStyle = fyne.TextStyle{Bold: true}
-	top := container.NewHBox(title, layout.NewSpacer(), widget.NewLabel("desktop"))
+	addBtn := widget.NewButtonWithIcon("", theme.ContentAddIcon(), a.onAddClipboard)
+	top := container.NewHBox(title, layout.NewSpacer(), addBtn)
 
 	a.list = widget.NewList(a.rowCount, a.rowTemplate, a.rowUpdate)
 	a.list.OnSelected = func(id widget.ListItemID) {
@@ -189,6 +193,47 @@ func (a *App) onGetConfig() {
 			}
 		})
 	}()
+}
+
+// onAddClipboard reads the clipboard and adds any config links it finds —
+// a single share link, several newline-separated links, or a base64
+// subscription blob (handled by provider.ExtractLinks). Duplicates of configs
+// already in the list are skipped.
+func (a *App) onAddClipboard() {
+	text := a.fyneApp.Clipboard().Content()
+	if strings.TrimSpace(text) == "" {
+		a.setStatus("Clipboard is empty.")
+		return
+	}
+	links := provider.ExtractLinks([]byte(text))
+	if len(links) == 0 {
+		a.setStatus("No config links found in clipboard.")
+		return
+	}
+	existing := make(map[string]struct{}, len(a.all))
+	for _, c := range a.all {
+		existing[c.Link] = struct{}{}
+	}
+	added := 0
+	for _, l := range links {
+		if _, dup := existing[l]; dup {
+			continue
+		}
+		c, err := parser.Parse(l)
+		if err != nil {
+			continue
+		}
+		c.Provider = "Clipboard"
+		a.all = append(a.all, c)
+		existing[l] = struct{}{}
+		added++
+	}
+	a.rebuildView()
+	if added == 0 {
+		a.setStatus("No new configs added (duplicates or unsupported).")
+	} else {
+		a.setStatus(fmt.Sprintf("Added %d config(s) from clipboard.", added))
+	}
 }
 
 func (a *App) onTest() {
