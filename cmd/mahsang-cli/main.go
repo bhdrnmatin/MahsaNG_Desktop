@@ -44,6 +44,8 @@ func main() {
 		cmdPing(ctx, arg(2))
 	case "connect":
 		cmdConnect(ctx, arg(2))
+	case "speed":
+		cmdSpeed(ctx, arg(2))
 	default:
 		fmt.Println("unknown command:", os.Args[1])
 		os.Exit(2)
@@ -118,6 +120,20 @@ func cmdPing(ctx context.Context, link string) {
 		return
 	}
 	fmt.Printf("ping: %dms\n", ping)
+}
+
+func cmdSpeed(ctx context.Context, link string) {
+	c, err := parser.Parse(link)
+	if err != nil {
+		fail(err)
+	}
+	fmt.Printf("Speed testing [%s] %s …\n", c.Protocol, c.Name)
+	mbps, n, err := core.MeasureSpeed(ctx, c.Outbound, 10*time.Second)
+	if err != nil {
+		fmt.Printf("speed: FAILED (%v)\n", err)
+		return
+	}
+	fmt.Printf("speed: %.1f Mbps (%.1f MB downloaded)\n", mbps, float64(n)/(1<<20))
 }
 
 func cmdConnect(ctx context.Context, link string) {

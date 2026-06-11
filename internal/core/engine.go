@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"time"
@@ -29,6 +30,34 @@ import (
 // measureURL is the latency probe target. A 204 response means "reached the
 // open internet through the proxy". Same endpoint v2rayNG uses.
 const measureURL = "https://www.google.com/generate_204"
+
+// speedBytes is how much we ask the speed-test endpoint to send (10 MB). The
+// download stops early if the time window elapses first.
+const speedBytes = 10 << 20
+
+// speedURLs are throughput-probe targets, tried in order. The first streams an
+// arbitrary byte count from Cloudflare's edge; the second is a static 10 MB
+// file. Some servers reset/block a particular host, so a fallback improves the
+// odds of getting a reading.
+var speedURLs = []string{
+	fmt.Sprintf("https://speed.cloudflare.com/__down?bytes=%d", speedBytes),
+	"http://cachefly.cachefly.net/10mb.test",
+}
+
+// proxyTransport returns an http.Transport whose connections are dialed through
+// the given xray instance, so requests made with it egress via the proxy.
+func proxyTransport(inst *xcore.Instance) *http.Transport {
+	return &http.Transport{
+		DisableKeepAlives: true,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dest, err := xnet.ParseDestination(network + ":" + addr)
+			if err != nil {
+				return nil, err
+			}
+			return xcore.Dial(ctx, inst, dest)
+		},
+	}
+}
 
 // buildInstance creates (but does not start) an xray instance whose primary
 // outbound is the given outbound JSON object. extraJSON is merged at the top
@@ -108,17 +137,7 @@ func MeasureDelay(ctx context.Context, outboundJSON []byte, timeout time.Duratio
 	}
 	defer inst.Close()
 
-	tr := &http.Transport{
-		DisableKeepAlives: true,
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			dest, err := xnet.ParseDestination(network + ":" + addr)
-			if err != nil {
-				return nil, err
-			}
-			return xcore.Dial(ctx, inst, dest)
-		},
-	}
-	client := &http.Client{Transport: tr, Timeout: timeout}
+	client := &http.Client{Transport: proxyTransport(inst), Timeout: timeout}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, measureURL, nil)
 	if err != nil {
@@ -131,4 +150,74 @@ func MeasureDelay(ctx context.Context, outboundJSON []byte, timeout time.Duratio
 	}
 	defer resp.Body.Close()
 	return time.Since(start).Milliseconds(), nil
+}
+
+// MeasureSpeed downloads a test file through the given outbound and reports the
+// download throughput in megabits per second, along with the number of bytes
+// transferred. Only the body-download phase is timed (connection/TLS setup is
+// excluded). The download is capped by `window`: whatever transfers within it
+// is used to compute the rate, so a slow link still yields a result rather than
+// hanging.
+func MeasureSpeed(ctx context.Context, outboundJSON []byte, window time.Duration) (mbps float64, bytes int64, err error) {
+	inst, err := buildInstance(outboundJSON, nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	if err := inst.Start(); err != nil {
+		return 0, 0, fmt.Errorf("start: %w", err)
+	}
+	defer inst.Close()
+
+	client := &http.Client{Transport: proxyTransport(inst)}
+	var lastErr error
+	for _, url := range speedURLs {
+		n, elapsed, err := downloadThrough(ctx, client, url, window)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return float64(n) * 8 / elapsed / 1e6, n, nil
+	}
+	return 0, 0, lastErr
+}
+
+// downloadThrough GETs url with client and times only the body-download phase,
+// stopping after window elapses (partial transfer is a valid sample). Returns
+// bytes read and seconds elapsed.
+func downloadThrough(ctx context.Context, client *http.Client, url string, window time.Duration) (int64, float64, error) {
+	// Allow connection/TLS setup time on top of the measurement window.
+	reqCtx, cancel := context.WithTimeout(ctx, window+8*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, 0, fmt.Errorf("speed endpoint http %d", resp.StatusCode)
+	}
+
+	// Stop after the window by closing the body, which unblocks the in-flight read.
+	stop := time.AfterFunc(window, func() { resp.Body.Close() })
+	defer stop.Stop()
+
+	start := time.Now()
+	n, copyErr := io.Copy(io.Discard, resp.Body)
+	elapsed := time.Since(start).Seconds()
+
+	if n == 0 {
+		if copyErr != nil {
+			return 0, 0, copyErr
+		}
+		return 0, 0, fmt.Errorf("no data received")
+	}
+	if elapsed <= 0 {
+		elapsed = 0.001
+	}
+	return n, elapsed, nil
 }
