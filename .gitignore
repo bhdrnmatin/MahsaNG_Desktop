@@ -1,0 +1,14 @@
+# Build output
+/mahsang
+/mahsang-cli
+/Benyamin_MohammadiNg
+bin/
+*.exe
+*.test
+*.out
+
+# Local Claude settings (machine-specific)
+.claude/settings.local.json
+
+# OS
+.DS_Store
