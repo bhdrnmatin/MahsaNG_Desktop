@@ -15,7 +15,6 @@ import (
 	"image/color"
 	"net"
 	"net/url"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -460,8 +459,8 @@ func (a *App) onConnectToggle() {
 		a.setStatus("Select a config first, then Connect.")
 		return
 	}
-	if os.Geteuid() != 0 {
-		a.setStatus("System-wide connect needs root — launch the app with sudo.")
+	if !tun.Elevated() {
+		a.setStatus("System-wide connect needs admin rights — run as root/Administrator.")
 		return
 	}
 	target := a.selected

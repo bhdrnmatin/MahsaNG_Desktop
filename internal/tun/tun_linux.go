@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+const tunName = "mahsa-tun"
+
 // Routing state saved by configureRoutes for restoreRoutes (guarded by the
 // package mutex in tun.go).
 var (

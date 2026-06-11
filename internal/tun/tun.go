@@ -15,8 +15,9 @@ import (
 	"github.com/xjasonlyu/tun2socks/v2/engine"
 )
 
+// tunName is defined per platform: macOS only accepts the kernel's utunN
+// naming, the others take a friendly name.
 const (
-	tunName = "mahsa-tun"
 	tunCIDR = "198.18.0.1/15" // benchmarking range; unlikely to collide
 	tunMTU  = 1500
 )

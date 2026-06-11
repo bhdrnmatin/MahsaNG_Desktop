@@ -7,6 +7,7 @@ require (
 	github.com/xjasonlyu/tun2socks/v2 v2.6.1-0.20260507015325-a9747fa54b2b
 	github.com/xtls/xray-core v1.260327.1-0.20260601021109-94ffd50060f1
 	golang.org/x/net v0.56.0
+	golang.org/x/sys v0.46.0
 )
 
 require (
@@ -64,7 +65,6 @@ require (
 	github.com/rymdport/portal v0.4.2 // indirect
 	github.com/sagernet/sing v0.5.1 // indirect
 	github.com/sagernet/sing-shadowsocks v0.2.7 // indirect
-	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c // indirect
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
@@ -82,7 +82,6 @@ require (
 	golang.org/x/image v0.39.0 // indirect
 	golang.org/x/mod v0.36.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
-	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.45.0 // indirect
