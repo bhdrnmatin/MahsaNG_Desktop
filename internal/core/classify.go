@@ -100,12 +100,14 @@ func medianMs(samples []int64) int64 {
 
 // classifyTransportErr decides which mechanism a client.Do error implicates.
 //
-// Caveat worth knowing: the request egresses through xray's Dial, so a remote
-// RST or drop is often wrapped in an xray error rather than surfacing as a clean
-// syscall.Errno. We therefore check errors.Is for the typed cases AND fall back
-// to substring matching on the message. The string fallback is the brittle part
-// — if you want this to be reliable, the cleaner fix is to plumb a typed error
-// out of proxyTransport's DialContext.
+// The request egresses through xray's Dial, which is pipe-backed: a connection
+// the upstream refuses or resets does not surface as a clean syscall.Errno but
+// as "io: read/write on closed pipe" (or an unexpected EOF). So we match those
+// teardown signatures as reset, alongside the rare cases where a clean errno
+// does come through. The distinction that holds in practice: an active teardown
+// yields a closed-pipe/EOF/reset string, while a silently dropped flow yields a
+// deadline/timeout — measured against a refused port, a real RST, and an
+// unroutable IP respectively.
 func classifyTransportErr(err error) model.Verdict {
 	var netErr interface{ Timeout() bool }
 	if errors.As(err, &netErr) && netErr.Timeout() {
@@ -121,7 +123,8 @@ func classifyTransportErr(err error) model.Verdict {
 	msg := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(msg, "reset"), strings.Contains(msg, "refused"),
-		strings.Contains(msg, "broken pipe"), strings.Contains(msg, "connection aborted"):
+		strings.Contains(msg, "broken pipe"), strings.Contains(msg, "connection aborted"),
+		strings.Contains(msg, "closed pipe"), strings.Contains(msg, "eof"):
 		return model.VerdictReset
 	case strings.Contains(msg, "timeout"), strings.Contains(msg, "deadline"),
 		strings.Contains(msg, "i/o timeout"):
