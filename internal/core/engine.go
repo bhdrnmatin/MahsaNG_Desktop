@@ -29,9 +29,17 @@ import (
 	"github.com/xtls/xray-core/infra/conf/serial"
 )
 
-// measureURL is the latency probe target. A 204 response means "reached the
-// open internet through the proxy". Same endpoint v2rayNG uses.
-const measureURL = "https://www.google.com/generate_204"
+// measureURL is the latency probe target: a site that is filtered in Iran.
+// Reaching it proves the tunnel egresses *outside* the national filter, not
+// merely that the server accepts a connection — an unfiltered target like
+// Google answers even through a relay that is itself still behind the filter.
+const measureURL = "https://www.youtube.com/"
+
+// measureMarker is a substring present in a genuine YouTube response but not in
+// the (Persian) national block page that the censor injects with HTTP 200 for
+// filtered sites. Finding it is what distinguishes a real egress from a block
+// page masquerading as success.
+const measureMarker = "youtube"
 
 // speedBytes is how much we ask the speed-test endpoint to send (10 MB). The
 // download stops early if the time window elapses first.
@@ -169,14 +177,21 @@ func MeasureDelay(ctx context.Context, outboundJSON []byte, timeout time.Duratio
 	if err != nil {
 		return -1, err
 	}
+	// Latency is the time to first response (headers in); the body read below is
+	// only for validation and must not inflate the measurement.
+	elapsed := time.Since(start)
 	defer resp.Body.Close()
-	// Only a 204 (or 200 from a tolerant mirror) proves we reached the real
-	// probe; anything else is a captive portal / block page masquerading as
-	// connectivity.
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK {
 		return -1, fmt.Errorf("probe returned http %d", resp.StatusCode)
 	}
-	return time.Since(start).Milliseconds(), nil
+	// A block page also answers 200, so require a marker proving the body is
+	// really YouTube. Read only a bounded prefix — the marker appears in the
+	// <head>, well within the first few KB.
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<10))
+	if !bytes.Contains(bytes.ToLower(body), []byte(measureMarker)) {
+		return -1, fmt.Errorf("probe response not from %s (blocked/intercepted)", measureURL)
+	}
+	return elapsed.Milliseconds(), nil
 }
 
 // MeasureSpeed downloads a test file through the given outbound and reports the
