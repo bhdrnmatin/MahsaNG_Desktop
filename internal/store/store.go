@@ -18,9 +18,10 @@ import (
 // parser.Parse. Name/Protocol/Outbound are re-derived from the link on load,
 // so the file stays small and survives changes to the outbound JSON format.
 type entry struct {
-	Link     string `json:"link"`
-	Provider string `json:"provider"`
-	PingMs   int64  `json:"ping_ms"`
+	Link     string        `json:"link"`
+	Provider string        `json:"provider"`
+	PingMs   int64         `json:"ping_ms"`
+	Verdict  model.Verdict `json:"verdict"`
 }
 
 // Load reads the saved list and re-parses each link. A missing file is not an
@@ -69,7 +70,7 @@ func Save(configs []model.Config) error {
 func encode(configs []model.Config) ([]byte, error) {
 	entries := make([]entry, len(configs))
 	for i, c := range configs {
-		entries[i] = entry{Link: c.Link, Provider: c.Provider, PingMs: c.PingMs}
+		entries[i] = entry{Link: c.Link, Provider: c.Provider, PingMs: c.PingMs, Verdict: c.LastVerdict}
 	}
 	return json.MarshalIndent(entries, "", "  ")
 }
@@ -87,6 +88,7 @@ func decode(data []byte) ([]model.Config, error) {
 		}
 		c.Provider = e.Provider
 		c.PingMs = e.PingMs
+		c.LastVerdict = e.Verdict
 		out = append(out, c)
 	}
 	return out, nil

@@ -85,11 +85,11 @@ func TestTestAllRetriesPreviouslyGood(t *testing.T) {
 
 	var mu sync.Mutex
 	calls := map[string]int{}
-	probe = func(_ context.Context, outbound []byte) int64 {
+	probe = func(_ context.Context, outbound []byte) model.ProbeResult {
 		mu.Lock()
 		calls[string(outbound)]++
 		mu.Unlock()
-		return model.PingFailed
+		return model.ProbeResult{Verdict: model.VerdictTimeout, PingMs: model.PingFailed}
 	}
 
 	configs := []model.Config{
@@ -109,6 +109,9 @@ func TestTestAllRetriesPreviouslyGood(t *testing.T) {
 		if c.PingMs != model.PingFailed {
 			t.Fatalf("%s: PingMs = %d, want PingFailed", c.Name, c.PingMs)
 		}
+		if c.LastVerdict != model.VerdictTimeout {
+			t.Fatalf("%s: LastVerdict = %v, want timeout", c.Name, c.LastVerdict)
+		}
 	}
 }
 
@@ -119,14 +122,14 @@ func TestTestAllRetrySucceeds(t *testing.T) {
 
 	var mu sync.Mutex
 	n := 0
-	probe = func(context.Context, []byte) int64 {
+	probe = func(context.Context, []byte) model.ProbeResult {
 		mu.Lock()
 		defer mu.Unlock()
 		n++
 		if n == 1 {
-			return model.PingFailed // transient failure
+			return model.ProbeResult{Verdict: model.VerdictReset, PingMs: model.PingFailed} // transient failure
 		}
-		return 280
+		return model.ProbeResult{Verdict: model.VerdictOK, PingMs: 280}
 	}
 
 	configs := []model.Config{{Name: "flaky", Outbound: []byte("x"), PingMs: 300}}
@@ -134,5 +137,8 @@ func TestTestAllRetrySucceeds(t *testing.T) {
 
 	if configs[0].PingMs != 280 {
 		t.Fatalf("PingMs = %d, want 280 (retry result)", configs[0].PingMs)
+	}
+	if configs[0].LastVerdict != model.VerdictOK {
+		t.Fatalf("LastVerdict = %v, want ok (retry result)", configs[0].LastVerdict)
 	}
 }

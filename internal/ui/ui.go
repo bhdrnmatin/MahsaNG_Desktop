@@ -199,7 +199,7 @@ func (a *App) rowUpdate(id widget.ListItemID, obj fyne.CanvasObject) {
 	proto.Refresh()
 
 	ping := content.Objects[4].(*canvas.Text)
-	ping.Text, ping.Color = pingLabel(c.PingMs)
+	ping.Text, ping.Color = pingLabel(c.PingMs, c.LastVerdict)
 	ping.Refresh()
 
 	if gi == a.connected {
@@ -210,19 +210,37 @@ func (a *App) rowUpdate(id widget.ListItemID, obj fyne.CanvasObject) {
 	bar.Refresh()
 }
 
-func pingLabel(ms int64) (string, color.Color) {
-	red := color.NRGBA{R: 0xef, G: 0x44, B: 0x44, A: 0xff}
+func pingLabel(ms int64, v model.Verdict) (string, color.Color) {
 	switch {
 	case ms == model.PingUntested:
 		return "—", color.Gray{Y: 0x88}
-	case ms < 0: // PingFailed: tested but no result
-		return "-1ms", red
+	case ms < 0: // PingFailed: show *why* it failed, not a useless -1ms
+		return verdictLabel(v)
 	case ms < 800:
 		return fmt.Sprintf("%dms", ms), color.NRGBA{R: 0x22, G: 0xc5, B: 0x5e, A: 0xff} // green
 	case ms < 2000:
 		return fmt.Sprintf("%dms", ms), color.NRGBA{R: 0xf5, G: 0x9e, B: 0x0b, A: 0xff} // orange
 	default:
 		return fmt.Sprintf("%dms", ms), color.NRGBA{R: 0xef, G: 0x44, B: 0x44, A: 0xff} // red
+	}
+}
+
+// verdictLabel renders a failed probe's verdict: a short word naming the
+// censorship mechanism, coloured to set network filtering (red/orange/purple)
+// apart from a local config fault (gray).
+func verdictLabel(v model.Verdict) (string, color.Color) {
+	red := color.NRGBA{R: 0xef, G: 0x44, B: 0x44, A: 0xff}
+	switch v {
+	case model.VerdictReset:
+		return "reset", red
+	case model.VerdictTimeout:
+		return "timeout", color.NRGBA{R: 0xf5, G: 0x9e, B: 0x0b, A: 0xff} // orange
+	case model.VerdictBlockPage:
+		return "blocked", color.NRGBA{R: 0xa1, G: 0x55, B: 0xf5, A: 0xff} // purple
+	case model.VerdictProxyError:
+		return "bad cfg", color.Gray{Y: 0x99}
+	default:
+		return "fail", red
 	}
 }
 

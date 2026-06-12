@@ -8,6 +8,49 @@ const (
 	PingFailed   int64 = -1 // tested, but the server returned no result
 )
 
+// Verdict classifies *why* a probe through a tunnel succeeded or failed, mapping
+// the observed behaviour to the censorship mechanism most likely behind it. The
+// point is that "failed" is not one thing: a RST mid-handshake, a silent
+// timeout, and a 200 carrying the block page each implicate a different filter
+// and call for a different evasion, so we keep them apart instead of collapsing
+// everything to PingFailed.
+type Verdict int8
+
+const (
+	VerdictUntested   Verdict = iota // not probed yet
+	VerdictOK                        // real egress: reached the filtered target, body genuine
+	VerdictReset                     // RST/refused -> DPI fingerprinted the protocol or SNI
+	VerdictTimeout                   // no reply, no RST -> IP black-hole or throttle
+	VerdictBlockPage                 // HTTP reply, but the censor's page (DNS poison / intercept)
+	VerdictProxyError                // xray instance wouldn't build/start: bad config, not the network
+)
+
+func (v Verdict) String() string {
+	switch v {
+	case VerdictOK:
+		return "ok"
+	case VerdictReset:
+		return "reset"
+	case VerdictTimeout:
+		return "timeout"
+	case VerdictBlockPage:
+		return "blockpage"
+	case VerdictProxyError:
+		return "proxyerror"
+	default:
+		return "untested"
+	}
+}
+
+// ProbeResult is the classified outcome of one delay probe. PingMs is valid
+// (>= 0) only when Verdict is VerdictOK; for every other verdict it is
+// PingFailed. Detail carries the raw error/status for logging.
+type ProbeResult struct {
+	Verdict Verdict
+	PingMs  int64
+	Detail  string
+}
+
 // Config is one VPN server entry, parsed from a share link.
 type Config struct {
 	// Link is the original share link (vmess://, vless://, trojan://, ss://).
@@ -24,4 +67,7 @@ type Config struct {
 	// PingMs is the last measured real-ping latency in milliseconds, or one of
 	// the PingUntested / PingFailed sentinels.
 	PingMs int64
+	// LastVerdict is why the last probe passed or failed (which censorship
+	// mechanism it points to). VerdictUntested until the first probe.
+	LastVerdict Verdict
 }

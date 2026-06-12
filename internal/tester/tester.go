@@ -28,18 +28,16 @@ const (
 // Result reports the outcome of testing one config (by its index in the slice
 // passed to TestAll), so the UI can update that row live.
 type Result struct {
-	Index  int
-	PingMs int64
+	Index   int
+	PingMs  int64
+	Verdict model.Verdict
 }
 
-// probe measures one config, mapping errors to PingFailed. A variable so
-// tests can stub out the real xray-core round trip.
-var probe = func(ctx context.Context, outbound []byte) int64 {
-	ping, err := core.MeasureDelay(ctx, outbound, probeTimeout)
-	if err != nil {
-		return model.PingFailed
-	}
-	return ping
+// probe measures one config and classifies the outcome (which censorship
+// mechanism a failure points to). A variable so tests can stub out the real
+// xray-core round trip.
+var probe = func(ctx context.Context, outbound []byte) model.ProbeResult {
+	return core.ProbeDelay(ctx, outbound, probeTimeout)
 }
 
 // TestAll measures every config's latency using a worker pool. It writes the
@@ -54,17 +52,18 @@ func TestAll(ctx context.Context, configs []model.Config, onResult func(Result))
 		go func() {
 			defer wg.Done()
 			for i := range jobs {
-				ping := probe(ctx, configs[i].Outbound)
+				res := probe(ctx, configs[i].Outbound)
 				// One failed sample on a server that worked before is
 				// usually probe noise (overload, probabilistic filtering),
 				// not death: give previously-good servers a second chance
 				// before flipping them to failed.
-				if ping == model.PingFailed && configs[i].PingMs >= 0 && ctx.Err() == nil {
-					ping = probe(ctx, configs[i].Outbound)
+				if res.PingMs == model.PingFailed && configs[i].PingMs >= 0 && ctx.Err() == nil {
+					res = probe(ctx, configs[i].Outbound)
 				}
-				configs[i].PingMs = ping
+				configs[i].PingMs = res.PingMs
+				configs[i].LastVerdict = res.Verdict
 				if onResult != nil {
-					onResult(Result{Index: i, PingMs: ping})
+					onResult(Result{Index: i, PingMs: res.PingMs, Verdict: res.Verdict})
 				}
 			}
 		}()
