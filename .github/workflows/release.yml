@@ -26,8 +26,6 @@ jobs:
             asset: mahsang-windows-amd64.zip
           - os: macos-latest # Apple Silicon (arm64)
             asset: mahsang-macos-arm64.tar.gz
-          - os: macos-13 # Intel (amd64)
-            asset: mahsang-macos-amd64.tar.gz
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
