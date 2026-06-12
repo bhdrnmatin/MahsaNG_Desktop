@@ -39,6 +39,10 @@ import (
 const (
 	socksPort  = 10809
 	maxServers = 100 // GET CONFIG caps the list to this many, spread across providers
+	// testTargetGood is how many working servers TEST ALL looks for before it
+	// stops probing the rest, so finding a few live servers does not wait out the
+	// whole dead tail's timeouts.
+	testTargetGood = 10
 )
 
 // App holds the running UI state.
@@ -372,18 +376,22 @@ func (a *App) onTest() {
 	a.cancel = cancel
 	total := len(testConfigs)
 	done := 0
+	good := 0
 
 	go func() {
-		tester.TestAll(ctx, testConfigs, func(r tester.Result) {
+		tester.TestAll(ctx, testConfigs, testTargetGood, func(r tester.Result) {
 			gi := idxs[r.Index]
 			fyne.Do(func() {
 				a.all[gi].PingMs = r.PingMs
 				a.all[gi].LastVerdict = r.Verdict
 				a.all[gi].Fragment = r.Fragment
 				done++
-				if done%8 == 0 || done == total {
+				if r.Verdict == model.VerdictOK {
+					good++
+				}
+				if done%8 == 0 {
 					a.list.Refresh()
-					a.setStatus(fmt.Sprintf("Testing… %d/%d", done, total))
+					a.setStatus(fmt.Sprintf("Testing… %d working, %d probed", good, done))
 				}
 			})
 		})
@@ -392,7 +400,8 @@ func (a *App) onTest() {
 			a.cancel = nil
 			a.setBusy(false)
 			a.persist() // ping results are worth keeping across runs
-			a.setStatus(fmt.Sprintf("Tested %d configs. Press SORT.", total))
+			a.list.Refresh()
+			a.setStatus(fmt.Sprintf("Found %d working (probed %d/%d). Press SORT.", good, done, total))
 		})
 	}()
 }

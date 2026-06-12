@@ -7,6 +7,7 @@ import (
 	"net"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"mahsang/internal/core"
@@ -43,12 +44,20 @@ var probe = func(ctx context.Context, outbound []byte, fragment bool) model.Prob
 	return core.ProbeDelay(ctx, outbound, probeTimeout, fragment)
 }
 
-// TestAll measures every config's latency using a worker pool. It writes the
-// result back into each config's PingMs and, if onResult is non-nil, calls it
-// as each measurement completes. Respects ctx cancellation.
-func TestAll(ctx context.Context, configs []model.Config, onResult func(Result)) {
+// TestAll measures configs' latency using a worker pool. It writes the result
+// back into each config's PingMs and, if onResult is non-nil, calls it as each
+// measurement completes. Respects ctx cancellation.
+//
+// When wantGood > 0 it stops feeding new probes once that many servers come back
+// working — the user just needs the fastest few live servers, not a full ranking
+// of the dead tail (each dead-but-accepting config otherwise burns the whole
+// probeTimeout). Configs are probed previously-good-first so those targets are
+// reached soonest; the configs never reached keep their prior PingMs. Pass
+// wantGood <= 0 to probe everything.
+func TestAll(ctx context.Context, configs []model.Config, wantGood int, onResult func(Result)) {
 	jobs := make(chan int)
 	var wg sync.WaitGroup
+	var goodCount int64
 
 	for w := 0; w < workers; w++ {
 		wg.Add(1)
@@ -75,6 +84,9 @@ func TestAll(ctx context.Context, configs []model.Config, onResult func(Result))
 				}
 				configs[i].PingMs = res.PingMs
 				configs[i].LastVerdict = res.Verdict
+				if res.Verdict == model.VerdictOK {
+					atomic.AddInt64(&goodCount, 1)
+				}
 				if onResult != nil {
 					onResult(Result{Index: i, PingMs: res.PingMs, Verdict: res.Verdict, Fragment: configs[i].Fragment})
 				}
@@ -82,7 +94,10 @@ func TestAll(ctx context.Context, configs []model.Config, onResult func(Result))
 		}()
 	}
 
-	for i := range configs {
+	for _, i := range probeOrder(configs) {
+		if wantGood > 0 && atomic.LoadInt64(&goodCount) >= int64(wantGood) {
+			break
+		}
 		select {
 		case <-ctx.Done():
 			close(jobs)
@@ -93,6 +108,38 @@ func TestAll(ctx context.Context, configs []model.Config, onResult func(Result))
 	}
 	close(jobs)
 	wg.Wait()
+}
+
+// probeOrder returns config indices ordered so an early-stopping TestAll reaches
+// working servers soonest: previously-good first (fastest first), then untested,
+// then previously-failed last. A previously-good server is the best bet to pass
+// again quickly, so probing those first lets wantGood fill before the slow dead
+// configs are ever touched.
+func probeOrder(configs []model.Config) []int {
+	order := make([]int, len(configs))
+	for i := range order {
+		order[i] = i
+	}
+	rank := func(p int64) int {
+		switch {
+		case p >= 0:
+			return 0 // previously good
+		case p == model.PingUntested:
+			return 1
+		default: // PingFailed
+			return 2
+		}
+	}
+	sort.SliceStable(order, func(a, b int) bool {
+		pa, pb := configs[order[a]].PingMs, configs[order[b]].PingMs
+		if ra, rb := rank(pa), rank(pb); ra != rb {
+			return ra < rb
+		} else if ra == 0 {
+			return pa < pb // fastest known-good first
+		}
+		return false
+	})
+	return order
 }
 
 const (

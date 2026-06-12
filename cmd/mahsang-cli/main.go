@@ -85,7 +85,7 @@ func cmdTest(ctx context.Context, src, limit string) {
 	}
 	fmt.Printf("Testing %d configs...\n", len(configs))
 	done := 0
-	tester.TestAll(ctx, configs, func(r tester.Result) {
+	tester.TestAll(ctx, configs, 0, func(r tester.Result) {
 		done++
 		fmt.Printf("\r  tested %d/%d", done, len(configs))
 	})

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"mahsang/internal/model"
@@ -97,7 +98,7 @@ func TestTestAllRetriesPreviouslyGood(t *testing.T) {
 		{Name: "untested", Outbound: []byte("new"), PingMs: model.PingUntested},
 		{Name: "was-dead", Outbound: []byte("dead"), PingMs: model.PingFailed},
 	}
-	TestAll(context.Background(), configs, nil)
+	TestAll(context.Background(), configs, 0, nil)
 
 	if calls["good"] != 2 {
 		t.Fatalf("previously-good config probed %d times, want 2", calls["good"])
@@ -133,7 +134,7 @@ func TestTestAllRetrySucceeds(t *testing.T) {
 	}
 
 	configs := []model.Config{{Name: "flaky", Outbound: []byte("x"), PingMs: 300}}
-	TestAll(context.Background(), configs, nil)
+	TestAll(context.Background(), configs, 0, nil)
 
 	if configs[0].PingMs != 280 {
 		t.Fatalf("PingMs = %d, want 280 (retry result)", configs[0].PingMs)
@@ -157,7 +158,7 @@ func TestTestAllAutoFragment(t *testing.T) {
 	}
 
 	configs := []model.Config{{Name: "needs-frag", Outbound: []byte("x"), PingMs: model.PingUntested}}
-	TestAll(context.Background(), configs, nil)
+	TestAll(context.Background(), configs, 0, nil)
 
 	c := configs[0]
 	if !c.Fragment {
@@ -165,5 +166,53 @@ func TestTestAllAutoFragment(t *testing.T) {
 	}
 	if c.PingMs != 150 || c.LastVerdict != model.VerdictOK {
 		t.Fatalf("got PingMs=%d verdict=%v, want 150/ok (fragmented result)", c.PingMs, c.LastVerdict)
+	}
+}
+
+// TestTestAllStopsAtWantGood: with every server working, TestAll must stop well
+// before probing them all once wantGood are found, leaving the rest untested.
+func TestTestAllStopsAtWantGood(t *testing.T) {
+	orig := probe
+	defer func() { probe = orig }()
+
+	var probed int64
+	probe = func(context.Context, []byte, bool) model.ProbeResult {
+		atomic.AddInt64(&probed, 1)
+		return model.ProbeResult{Verdict: model.VerdictOK, PingMs: 100}
+	}
+
+	const total, wantGood = 100, 3
+	configs := make([]model.Config, total)
+	for i := range configs {
+		configs[i] = model.Config{Outbound: []byte("x"), PingMs: model.PingUntested}
+	}
+	TestAll(context.Background(), configs, wantGood, nil)
+
+	n := atomic.LoadInt64(&probed)
+	if n >= total {
+		t.Fatalf("probed %d of %d, want early stop after ~%d good", n, total, wantGood)
+	}
+	if n < wantGood {
+		t.Fatalf("probed %d, want at least wantGood=%d", n, wantGood)
+	}
+}
+
+// TestProbeOrder: previously-good first (fastest first), then untested, then failed.
+func TestProbeOrder(t *testing.T) {
+	configs := []model.Config{
+		{Name: "failed", PingMs: model.PingFailed},
+		{Name: "slow-good", PingMs: 400},
+		{Name: "untested", PingMs: model.PingUntested},
+		{Name: "fast-good", PingMs: 120},
+	}
+	got := make([]string, 0, len(configs))
+	for _, i := range probeOrder(configs) {
+		got = append(got, configs[i].Name)
+	}
+	want := []string{"fast-good", "slow-good", "untested", "failed"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("probeOrder = %v, want %v", got, want)
+		}
 	}
 }
