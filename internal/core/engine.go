@@ -156,42 +156,16 @@ func (t *Tunnel) Close() error {
 	return t.inst.Close()
 }
 
-// MeasureDelay starts a throwaway instance for the given outbound and times an
-// HTTP request to the probe URL routed through it. Returns latency in
-// milliseconds, or an error if the server is unreachable within timeout.
+// MeasureDelay returns a server's median real-ping latency in milliseconds, or
+// an error if the probe did not reach the (filtered) target through it. It is a
+// thin wrapper over ProbeDelay for callers that want a plain latency/error
+// rather than the classified verdict.
 func MeasureDelay(ctx context.Context, outboundJSON []byte, timeout time.Duration) (int64, error) {
-	inst, err := startMeasureInstance(outboundJSON)
-	if err != nil {
-		return -1, err
+	res := ProbeDelay(ctx, outboundJSON, timeout)
+	if res.PingMs < 0 {
+		return -1, fmt.Errorf("probe failed: %s (%s)", res.Verdict, res.Detail)
 	}
-	defer inst.Close()
-
-	client := &http.Client{Transport: proxyTransport(inst), Timeout: timeout}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, measureURL, nil)
-	if err != nil {
-		return -1, err
-	}
-	start := time.Now()
-	resp, err := client.Do(req)
-	if err != nil {
-		return -1, err
-	}
-	// Latency is the time to first response (headers in); the body read below is
-	// only for validation and must not inflate the measurement.
-	elapsed := time.Since(start)
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return -1, fmt.Errorf("probe returned http %d", resp.StatusCode)
-	}
-	// A block page also answers 200, so require a marker proving the body is
-	// really YouTube. Read only a bounded prefix — the marker appears in the
-	// <head>, well within the first few KB.
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<10))
-	if !bytes.Contains(bytes.ToLower(body), []byte(measureMarker)) {
-		return -1, fmt.Errorf("probe response not from %s (blocked/intercepted)", measureURL)
-	}
-	return elapsed.Milliseconds(), nil
+	return res.PingMs, nil
 }
 
 // MeasureSpeed downloads a test file through the given outbound and reports the
