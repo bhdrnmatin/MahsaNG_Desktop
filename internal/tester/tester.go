@@ -31,13 +31,16 @@ type Result struct {
 	Index   int
 	PingMs  int64
 	Verdict model.Verdict
+	// Fragment is whether the auto-retry found this server needs TLS-ClientHello
+	// fragmentation, so the UI can flag it.
+	Fragment bool
 }
 
 // probe measures one config and classifies the outcome (which censorship
-// mechanism a failure points to). A variable so tests can stub out the real
-// xray-core round trip.
-var probe = func(ctx context.Context, outbound []byte) model.ProbeResult {
-	return core.ProbeDelay(ctx, outbound, probeTimeout)
+// mechanism a failure points to), optionally fragmenting the TLS ClientHello. A
+// variable so tests can stub out the real xray-core round trip.
+var probe = func(ctx context.Context, outbound []byte, fragment bool) model.ProbeResult {
+	return core.ProbeDelay(ctx, outbound, probeTimeout, fragment)
 }
 
 // TestAll measures every config's latency using a worker pool. It writes the
@@ -52,18 +55,28 @@ func TestAll(ctx context.Context, configs []model.Config, onResult func(Result))
 		go func() {
 			defer wg.Done()
 			for i := range jobs {
-				res := probe(ctx, configs[i].Outbound)
+				res := probe(ctx, configs[i].Outbound, configs[i].Fragment)
 				// One failed sample on a server that worked before is
 				// usually probe noise (overload, probabilistic filtering),
 				// not death: give previously-good servers a second chance
 				// before flipping them to failed.
 				if res.PingMs == model.PingFailed && configs[i].PingMs >= 0 && ctx.Err() == nil {
-					res = probe(ctx, configs[i].Outbound)
+					res = probe(ctx, configs[i].Outbound, configs[i].Fragment)
+				}
+				// A reset is SNI-based DPI tearing down the TLS handshake.
+				// Fragmenting the ClientHello often defeats it, so retry once
+				// with fragmentation; if that works, remember this server needs
+				// it (for later probes and the live tunnel).
+				if res.Verdict == model.VerdictReset && !configs[i].Fragment && ctx.Err() == nil {
+					if fr := probe(ctx, configs[i].Outbound, true); fr.Verdict == model.VerdictOK {
+						res = fr
+						configs[i].Fragment = true
+					}
 				}
 				configs[i].PingMs = res.PingMs
 				configs[i].LastVerdict = res.Verdict
 				if onResult != nil {
-					onResult(Result{Index: i, PingMs: res.PingMs, Verdict: res.Verdict})
+					onResult(Result{Index: i, PingMs: res.PingMs, Verdict: res.Verdict, Fragment: configs[i].Fragment})
 				}
 			}
 		}()

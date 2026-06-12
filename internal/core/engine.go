@@ -70,12 +70,22 @@ func proxyTransport(inst *xcore.Instance) *http.Transport {
 }
 
 // buildInstance creates (but does not start) an xray instance whose primary
-// outbound is the given outbound JSON object. extraJSON is merged at the top
-// level of the config (used to add a SOCKS inbound for the live tunnel).
-func buildInstance(outboundJSON []byte, extra map[string]any) (*xcore.Instance, error) {
+// outbound is the given outbound JSON object. extra is merged at the top level
+// of the config (used to add a SOCKS inbound for the live tunnel). When fragment
+// is set, the proxy outbound dials through a TLS-ClientHello fragmenting outbound
+// so SNI-based DPI cannot reassemble the server name.
+func buildInstance(outboundJSON []byte, fragment bool, extra map[string]any) (*xcore.Instance, error) {
+	proxy := mustObject(outboundJSON)
+	outbounds := []any{proxy}
+	// Skip injection if the outbound isn't a JSON object; the loader will then
+	// fail with a clear error, same as the non-fragment path.
+	if pm, ok := proxy.(map[string]any); ok && fragment {
+		setDialerProxy(pm, "fragment")
+		outbounds = append(outbounds, fragmentOutbound())
+	}
 	full := map[string]any{
 		"log":       map[string]any{"loglevel": "none"},
-		"outbounds": []any{mustObject(outboundJSON)},
+		"outbounds": outbounds,
 	}
 	maps.Copy(full, extra)
 	cfgBytes, err := json.Marshal(full)
@@ -93,10 +103,44 @@ func buildInstance(outboundJSON []byte, extra map[string]any) (*xcore.Instance, 
 	return inst, nil
 }
 
+// fragmentOutbound is a freedom outbound that splits the outgoing TLS
+// ClientHello across packets, so DPI reading the SNI cannot reassemble it. The
+// proxy outbound routes its dial through this via sockopt.dialerProxy. The
+// length/interval ranges are the values MahsaNG / v2rayNG ship by default.
+func fragmentOutbound() map[string]any {
+	return map[string]any{
+		"tag":      "fragment",
+		"protocol": "freedom",
+		"settings": map[string]any{
+			"fragment": map[string]any{
+				"packets":  "tlshello",
+				"length":   "100-200",
+				"interval": "10-20",
+			},
+		},
+	}
+}
+
+// setDialerProxy makes ob dial through the outbound with the given tag, creating
+// the streamSettings.sockopt path if it is absent.
+func setDialerProxy(ob map[string]any, tag string) {
+	ss, _ := ob["streamSettings"].(map[string]any)
+	if ss == nil {
+		ss = map[string]any{}
+		ob["streamSettings"] = ss
+	}
+	sockopt, _ := ss["sockopt"].(map[string]any)
+	if sockopt == nil {
+		sockopt = map[string]any{}
+		ss["sockopt"] = sockopt
+	}
+	sockopt["dialerProxy"] = tag
+}
+
 // startMeasureInstance builds and starts a throwaway instance for the given
 // outbound, used by the delay and speed probes. The caller must Close it.
-func startMeasureInstance(outboundJSON []byte) (*xcore.Instance, error) {
-	inst, err := buildInstance(outboundJSON, nil)
+func startMeasureInstance(outboundJSON []byte, fragment bool) (*xcore.Instance, error) {
+	inst, err := buildInstance(outboundJSON, fragment, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -118,8 +162,9 @@ type Tunnel struct {
 
 // StartTunnel builds and starts an instance with a local SOCKS inbound on
 // 127.0.0.1:socksPort and an HTTP inbound on socksPort+1, both feeding the given
-// outbound. Call Close to stop it.
-func StartTunnel(outboundJSON []byte, socksPort int) (*Tunnel, error) {
+// outbound. When fragment is set the tunnel fragments the TLS ClientHello (for
+// servers the tester found need it). Call Close to stop it.
+func StartTunnel(outboundJSON []byte, socksPort int, fragment bool) (*Tunnel, error) {
 	httpPort := socksPort + 1
 	sniffing := map[string]any{"enabled": true, "destOverride": []any{"http", "tls"}}
 	extra := map[string]any{
@@ -138,7 +183,7 @@ func StartTunnel(outboundJSON []byte, socksPort int) (*Tunnel, error) {
 			},
 		},
 	}
-	inst, err := buildInstance(outboundJSON, extra)
+	inst, err := buildInstance(outboundJSON, fragment, extra)
 	if err != nil {
 		return nil, err
 	}
@@ -160,8 +205,8 @@ func (t *Tunnel) Close() error {
 // an error if the probe did not reach the (filtered) target through it. It is a
 // thin wrapper over ProbeDelay for callers that want a plain latency/error
 // rather than the classified verdict.
-func MeasureDelay(ctx context.Context, outboundJSON []byte, timeout time.Duration) (int64, error) {
-	res := ProbeDelay(ctx, outboundJSON, timeout)
+func MeasureDelay(ctx context.Context, outboundJSON []byte, timeout time.Duration, fragment bool) (int64, error) {
+	res := ProbeDelay(ctx, outboundJSON, timeout, fragment)
 	if res.PingMs < 0 {
 		return -1, fmt.Errorf("probe failed: %s (%s)", res.Verdict, res.Detail)
 	}
@@ -174,8 +219,8 @@ func MeasureDelay(ctx context.Context, outboundJSON []byte, timeout time.Duratio
 // excluded). The download is capped by `window`: whatever transfers within it
 // is used to compute the rate, so a slow link still yields a result rather than
 // hanging.
-func MeasureSpeed(ctx context.Context, outboundJSON []byte, window time.Duration) (mbps float64, bytes int64, err error) {
-	inst, err := startMeasureInstance(outboundJSON)
+func MeasureSpeed(ctx context.Context, outboundJSON []byte, window time.Duration, fragment bool) (mbps float64, bytes int64, err error) {
+	inst, err := startMeasureInstance(outboundJSON, fragment)
 	if err != nil {
 		return 0, 0, err
 	}

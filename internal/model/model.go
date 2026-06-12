@@ -70,4 +70,8 @@ type Config struct {
 	// LastVerdict is why the last probe passed or failed (which censorship
 	// mechanism it points to). VerdictUntested until the first probe.
 	LastVerdict Verdict
+	// Fragment means this server only works with TLS-ClientHello fragmentation
+	// (SNI-based DPI resets it otherwise). Discovered by the tester's auto-retry
+	// and then used for every probe and the live tunnel.
+	Fragment bool
 }

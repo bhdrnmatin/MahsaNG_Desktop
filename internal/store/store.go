@@ -22,6 +22,7 @@ type entry struct {
 	Provider string        `json:"provider"`
 	PingMs   int64         `json:"ping_ms"`
 	Verdict  model.Verdict `json:"verdict"`
+	Fragment bool          `json:"fragment,omitempty"`
 }
 
 // Load reads the saved list and re-parses each link. A missing file is not an
@@ -70,7 +71,7 @@ func Save(configs []model.Config) error {
 func encode(configs []model.Config) ([]byte, error) {
 	entries := make([]entry, len(configs))
 	for i, c := range configs {
-		entries[i] = entry{Link: c.Link, Provider: c.Provider, PingMs: c.PingMs, Verdict: c.LastVerdict}
+		entries[i] = entry{Link: c.Link, Provider: c.Provider, PingMs: c.PingMs, Verdict: c.LastVerdict, Fragment: c.Fragment}
 	}
 	return json.MarshalIndent(entries, "", "  ")
 }
@@ -89,6 +90,7 @@ func decode(data []byte) ([]model.Config, error) {
 		c.Provider = e.Provider
 		c.PingMs = e.PingMs
 		c.LastVerdict = e.Verdict
+		c.Fragment = e.Fragment
 		out = append(out, c)
 	}
 	return out, nil

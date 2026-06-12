@@ -116,7 +116,7 @@ func cmdPing(ctx context.Context, link string) {
 	fmt.Printf("Parsed: [%s] %s\nOutbound: %s\n\n", c.Protocol, c.Name, c.Outbound)
 	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	ping, err := core.MeasureDelay(cctx, c.Outbound, 12*time.Second)
+	ping, err := core.MeasureDelay(cctx, c.Outbound, 12*time.Second, c.Fragment)
 	if err != nil {
 		fmt.Printf("ping: FAILED (%v)\n", err)
 		return
@@ -130,7 +130,7 @@ func cmdSpeed(ctx context.Context, link string) {
 		fail(err)
 	}
 	fmt.Printf("Speed testing [%s] %s …\n", c.Protocol, c.Name)
-	mbps, n, err := core.MeasureSpeed(ctx, c.Outbound, 10*time.Second)
+	mbps, n, err := core.MeasureSpeed(ctx, c.Outbound, 10*time.Second, c.Fragment)
 	if err != nil {
 		fmt.Printf("speed: FAILED (%v)\n", err)
 		return
@@ -144,7 +144,7 @@ func cmdConnect(ctx context.Context, link string) {
 		fail(err)
 	}
 	const port = 10809
-	tun, err := core.StartTunnel(c.Outbound, port)
+	tun, err := core.StartTunnel(c.Outbound, port, c.Fragment)
 	if err != nil {
 		fail(err)
 	}

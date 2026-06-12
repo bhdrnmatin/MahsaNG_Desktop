@@ -30,8 +30,8 @@ const latencySamples = 4
 // It builds the instance once and samples latency several times through it,
 // reporting the median so a working-but-jittery server is not condemned by one
 // unlucky round trip.
-func ProbeDelay(ctx context.Context, outboundJSON []byte, timeout time.Duration) model.ProbeResult {
-	inst, err := startMeasureInstance(outboundJSON)
+func ProbeDelay(ctx context.Context, outboundJSON []byte, timeout time.Duration, fragment bool) model.ProbeResult {
+	inst, err := startMeasureInstance(outboundJSON, fragment)
 	if err != nil {
 		// Build/start failure is about *this config*, not the network.
 		return model.ProbeResult{Verdict: model.VerdictProxyError, PingMs: model.PingFailed, Detail: err.Error()}

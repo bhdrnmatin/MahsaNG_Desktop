@@ -196,6 +196,9 @@ func (a *App) rowUpdate(id widget.ListItemID, obj fyne.CanvasObject) {
 
 	proto := content.Objects[3].(*canvas.Text)
 	proto.Text = c.Protocol
+	if c.Fragment {
+		proto.Text += " ✂" // server needs TLS-ClientHello fragmentation
+	}
 	proto.Refresh()
 
 	ping := content.Objects[4].(*canvas.Text)
@@ -375,6 +378,8 @@ func (a *App) onTest() {
 			gi := idxs[r.Index]
 			fyne.Do(func() {
 				a.all[gi].PingMs = r.PingMs
+				a.all[gi].LastVerdict = r.Verdict
+				a.all[gi].Fragment = r.Fragment
 				done++
 				if done%8 == 0 || done == total {
 					a.list.Refresh()
@@ -464,7 +469,7 @@ func (a *App) onSpeedTest() {
 	a.setBusy(true)
 	a.setStatus("Speed testing " + c.Name + " …")
 	go func() {
-		mbps, n, err := core.MeasureSpeed(context.Background(), c.Outbound, 10*time.Second)
+		mbps, n, err := core.MeasureSpeed(context.Background(), c.Outbound, 10*time.Second, c.Fragment)
 		fyne.Do(func() {
 			a.setBusy(false)
 			if err != nil {
@@ -507,7 +512,7 @@ func (a *App) onConnectToggle() {
 	a.setBusy(true)
 	a.setStatus("Connecting…")
 	go func() {
-		t, err := core.StartTunnel(c.Outbound, socksPort)
+		t, err := core.StartTunnel(c.Outbound, socksPort, c.Fragment)
 		if err != nil {
 			fyne.Do(func() {
 				a.setBusy(false)

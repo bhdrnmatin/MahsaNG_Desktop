@@ -85,7 +85,7 @@ func TestTestAllRetriesPreviouslyGood(t *testing.T) {
 
 	var mu sync.Mutex
 	calls := map[string]int{}
-	probe = func(_ context.Context, outbound []byte) model.ProbeResult {
+	probe = func(_ context.Context, outbound []byte, _ bool) model.ProbeResult {
 		mu.Lock()
 		calls[string(outbound)]++
 		mu.Unlock()
@@ -122,12 +122,12 @@ func TestTestAllRetrySucceeds(t *testing.T) {
 
 	var mu sync.Mutex
 	n := 0
-	probe = func(context.Context, []byte) model.ProbeResult {
+	probe = func(context.Context, []byte, bool) model.ProbeResult {
 		mu.Lock()
 		defer mu.Unlock()
 		n++
 		if n == 1 {
-			return model.ProbeResult{Verdict: model.VerdictReset, PingMs: model.PingFailed} // transient failure
+			return model.ProbeResult{Verdict: model.VerdictTimeout, PingMs: model.PingFailed} // transient failure
 		}
 		return model.ProbeResult{Verdict: model.VerdictOK, PingMs: 280}
 	}
@@ -140,5 +140,30 @@ func TestTestAllRetrySucceeds(t *testing.T) {
 	}
 	if configs[0].LastVerdict != model.VerdictOK {
 		t.Fatalf("LastVerdict = %v, want ok (retry result)", configs[0].LastVerdict)
+	}
+}
+
+// TestTestAllAutoFragment: a server that resets without fragmentation but works
+// with it must be retried fragmented, marked Fragment, and report the success.
+func TestTestAllAutoFragment(t *testing.T) {
+	orig := probe
+	defer func() { probe = orig }()
+
+	probe = func(_ context.Context, _ []byte, fragment bool) model.ProbeResult {
+		if fragment {
+			return model.ProbeResult{Verdict: model.VerdictOK, PingMs: 150}
+		}
+		return model.ProbeResult{Verdict: model.VerdictReset, PingMs: model.PingFailed}
+	}
+
+	configs := []model.Config{{Name: "needs-frag", Outbound: []byte("x"), PingMs: model.PingUntested}}
+	TestAll(context.Background(), configs, nil)
+
+	c := configs[0]
+	if !c.Fragment {
+		t.Fatal("Fragment = false, want true (auto-retry should have flagged it)")
+	}
+	if c.PingMs != 150 || c.LastVerdict != model.VerdictOK {
+		t.Fatalf("got PingMs=%d verdict=%v, want 150/ok (fragmented result)", c.PingMs, c.LastVerdict)
 	}
 }
