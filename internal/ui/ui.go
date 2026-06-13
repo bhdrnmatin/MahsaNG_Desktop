@@ -23,6 +23,7 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -138,7 +139,8 @@ func (a *App) buildContent() fyne.CanvasObject {
 	a.testBtn = widget.NewButton("TEST ALL", a.onTest)
 	sortBtn := widget.NewButton("SORT", a.onSort)
 	delBtn := widget.NewButton("Delete Invalid", a.onDeleteInvalid)
-	buttons := container.NewGridWithColumns(4, getBtn, a.testBtn, sortBtn, delBtn)
+	delAllBtn := widget.NewButton("Delete All", a.onDeleteAll)
+	buttons := container.NewGridWithColumns(5, getBtn, a.testBtn, sortBtn, delBtn, delAllBtn)
 
 	a.connBtn = widget.NewButton("Connect", a.onConnectToggle)
 	a.connBtn.Importance = widget.HighImportance
@@ -243,6 +245,8 @@ func verdictLabel(v model.Verdict) (string, color.Color) {
 		return "reset", red
 	case model.VerdictTimeout:
 		return "timeout", color.NRGBA{R: 0xf5, G: 0x9e, B: 0x0b, A: 0xff} // orange
+	case model.VerdictThrottled:
+		return "throttled", color.NRGBA{R: 0xea, G: 0xb3, B: 0x08, A: 0xff} // amber
 	case model.VerdictBlockPage:
 		return "blocked", color.NRGBA{R: 0xa1, G: 0x55, B: 0xf5, A: 0xff} // purple
 	case model.VerdictProxyError:
@@ -429,6 +433,7 @@ func verdictBreakdown(v map[model.Verdict]int) string {
 	}{
 		{model.VerdictTimeout, "timeout"},
 		{model.VerdictReset, "reset"},
+		{model.VerdictThrottled, "throttled"},
 		{model.VerdictBlockPage, "blocked"},
 		{model.VerdictProxyError, "bad cfg"},
 	} {
@@ -470,6 +475,33 @@ func (a *App) onDeleteInvalid() {
 		a.persist()
 		a.setStatus(fmt.Sprintf("Removed %d invalid config(s).", removed))
 	}
+}
+
+// onDeleteAll clears the entire list, including working configs — the only way
+// to drop ones TEST marked good. It is guarded by a confirm dialog because it
+// can't be undone. An active tunnel keeps running; Disconnect still works.
+func (a *App) onDeleteAll() {
+	if a.busy {
+		return // a running TEST ALL holds index snapshots into a.all
+	}
+	if len(a.all) == 0 {
+		a.setStatus("Nothing to delete.")
+		return
+	}
+	dialog.ShowConfirm("Delete all configs?",
+		fmt.Sprintf("Remove all %d configs, including working ones? This can't be undone.", len(a.all)),
+		func(confirmed bool) {
+			if !confirmed {
+				return
+			}
+			a.all = nil
+			a.selected = -1
+			a.connected = -1
+			a.rebuildView()
+			a.list.UnselectAll()
+			a.persist()
+			a.setStatus("Deleted all configs. Press GET CONFIG.")
+		}, a.win)
 }
 
 func (a *App) onSort() {
