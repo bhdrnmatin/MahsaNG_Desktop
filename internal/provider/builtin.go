@@ -18,22 +18,21 @@ package provider
 //
 // weight is how many configs a provider contributes per round in GET CONFIG's
 // selection: higher = a larger share of the capped list. Weights favour the
-// Iran-oriented aggregators; the RU-White-* sources are whitelist configs
-// built for users inside Russia (VK-SNI tricks) and near-never work from
-// other countries, so they get the minimum share rather than the largest
-// (field-tested 2026-06: every sampled RU-White config failed from Iran).
+// Iran-oriented sources. Dropped 2026-06: the RU-White whitelist sources (built
+// for Russia; field-tested, every sampled one failed from Iran) and the
+// mahdibland Aggregator (its feed went empty).
 var builtinSources = []struct {
 	name, url string
 	weight    int
 }{
+	// Iran-oriented, auto-tested "healthy only", carries REALITY.
+	{"Freedom-VLESS", "https://raw.githubusercontent.com/MahanKenway/Freedom-V2Ray/main/configs/vless.txt", 3},
 	{"Epodonios", "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/All_Configs_Sub.txt", 3},
 	{"BarryFar-VLESS", "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Splitted-By-Protocol/vless.txt", 3},
+	// Filtered subscription, carries REALITY.
+	{"MatinGhanbari-VLESS", "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/filtered/subs/vless.txt", 2},
 	{"BarryFar", "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/All_Configs_Sub.txt", 2},
-	{"Aggregator", "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/sub_merge.txt", 2},
 	{"MhdiTaheri", "https://raw.githubusercontent.com/MhdiTaheri/V2rayCollector/main/sub/mix", 2},
-	{"RU-White-Checked", "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-checked.txt", 1},
-	{"RU-White-All", "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt", 1},
-	{"RU-White-SNI", "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-SNI-RU-all.txt", 1},
 }
 
 // Builtins returns the providers enabled by default.
