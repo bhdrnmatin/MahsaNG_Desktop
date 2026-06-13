@@ -380,6 +380,7 @@ func (a *App) onTest() {
 	total := len(testConfigs)
 	done := 0
 	good := 0
+	verdicts := map[model.Verdict]int{} // failure mix, for the final breakdown
 
 	go func() {
 		tester.TestAll(ctx, testConfigs, testTargetGood, func(r tester.Result) {
@@ -389,6 +390,7 @@ func (a *App) onTest() {
 				a.all[gi].LastVerdict = r.Verdict
 				a.all[gi].Fragment = r.Fragment
 				done++
+				verdicts[r.Verdict]++
 				if r.Verdict == model.VerdictOK {
 					good++
 				}
@@ -407,9 +409,34 @@ func (a *App) onTest() {
 			a.testBtn.Enable()
 			a.persist() // ping results are worth keeping across runs
 			a.list.Refresh()
-			a.setStatus(fmt.Sprintf("Found %d working (probed %d/%d). Press SORT.", good, done, total))
+			// Show why the rest failed (reset vs timeout vs blocked) — it points
+			// at the lever that would raise yield. See memory note
+			// config-testing-false-positives.
+			a.setStatus(fmt.Sprintf("Found %d working%s (probed %d/%d). Press SORT.",
+				good, verdictBreakdown(verdicts), done, total))
 		})
 	}()
+}
+
+// verdictBreakdown renders the non-OK verdict tally as " · 71 timeout · 22 reset
+// · 5 blocked · 3 bad cfg", omitting any category with no hits. Empty string if
+// there were no failures.
+func verdictBreakdown(v map[model.Verdict]int) string {
+	var b strings.Builder
+	for _, c := range []struct {
+		verdict model.Verdict
+		label   string
+	}{
+		{model.VerdictTimeout, "timeout"},
+		{model.VerdictReset, "reset"},
+		{model.VerdictBlockPage, "blocked"},
+		{model.VerdictProxyError, "bad cfg"},
+	} {
+		if n := v[c.verdict]; n > 0 {
+			fmt.Fprintf(&b, " · %d %s", n, c.label)
+		}
+	}
+	return b.String()
 }
 
 // onDeleteInvalid removes configs that were tested and returned no result
