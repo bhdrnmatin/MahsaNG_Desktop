@@ -58,6 +58,7 @@ type App struct {
 	list    *widget.List
 	status  *widget.Label
 	connBtn *widget.Button
+	testBtn *widget.Button
 
 	filter    string // "" = all providers (reserved; no UI filter currently)
 	selected  int    // index into all, or -1
@@ -134,10 +135,10 @@ func (a *App) buildContent() fyne.CanvasObject {
 	a.list.OnUnselected = func(widget.ListItemID) { a.selected = -1 }
 
 	getBtn := widget.NewButton("GET CONFIG", a.onGetConfig)
-	testBtn := widget.NewButton("TEST ALL", a.onTest)
+	a.testBtn = widget.NewButton("TEST ALL", a.onTest)
 	sortBtn := widget.NewButton("SORT", a.onSort)
 	delBtn := widget.NewButton("Delete Invalid", a.onDeleteInvalid)
-	buttons := container.NewGridWithColumns(4, getBtn, testBtn, sortBtn, delBtn)
+	buttons := container.NewGridWithColumns(4, getBtn, a.testBtn, sortBtn, delBtn)
 
 	a.connBtn = widget.NewButton("Connect", a.onConnectToggle)
 	a.connBtn.Importance = widget.HighImportance
@@ -366,6 +367,8 @@ func (a *App) onTest() {
 		return
 	}
 	a.setBusy(true)
+	a.testBtn.Disable() // visual cue it's running; stops repeat clicks
+	a.setStatus(fmt.Sprintf("Testing… 0/%d probed", len(a.view)))
 	idxs := append([]int(nil), a.view...) // snapshot of visible indices
 	testConfigs := make([]model.Config, len(idxs))
 	for i, gi := range idxs {
@@ -389,9 +392,11 @@ func (a *App) onTest() {
 				if r.Verdict == model.VerdictOK {
 					good++
 				}
+				// Status updates every result (cheap label); the heavier list
+				// redraw stays throttled so a big batch doesn't thrash.
+				a.setStatus(fmt.Sprintf("Testing… %d working, %d/%d probed", good, done, total))
 				if done%8 == 0 {
 					a.list.Refresh()
-					a.setStatus(fmt.Sprintf("Testing… %d working, %d probed", good, done))
 				}
 			})
 		})
@@ -399,6 +404,7 @@ func (a *App) onTest() {
 			cancel() // release the context now that all workers are done
 			a.cancel = nil
 			a.setBusy(false)
+			a.testBtn.Enable()
 			a.persist() // ping results are worth keeping across runs
 			a.list.Refresh()
 			a.setStatus(fmt.Sprintf("Found %d working (probed %d/%d). Press SORT.", good, done, total))
