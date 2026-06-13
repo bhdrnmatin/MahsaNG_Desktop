@@ -23,6 +23,7 @@ const (
 	VerdictTimeout                   // no reply, no RST -> IP black-hole or throttle
 	VerdictBlockPage                 // HTTP reply, but the censor's page (DNS poison / intercept)
 	VerdictProxyError                // xray instance wouldn't build/start: bad config, not the network
+	VerdictThrottled                 // handshake+headers OK, then the flow was cut mid-body (byte-limit/throttle)
 )
 
 func (v Verdict) String() string {
@@ -37,6 +38,8 @@ func (v Verdict) String() string {
 		return "blockpage"
 	case VerdictProxyError:
 		return "proxyerror"
+	case VerdictThrottled:
+		return "throttled"
 	default:
 		return "untested"
 	}

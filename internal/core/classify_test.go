@@ -43,7 +43,7 @@ func TestSampleDelayBodyGate(t *testing.T) {
 		wantOK bool // expects a non-negative latency
 	}{
 		{"/ok", model.VerdictOK, true},
-		{"/short", model.VerdictTimeout, false},      // throttled: marker but short body
+		{"/short", model.VerdictThrottled, false},    // marker but body cut short = byte-limit
 		{"/nomarker", model.VerdictBlockPage, false}, // injected page
 		{"/bad", model.VerdictBlockPage, false},      // non-200
 	}

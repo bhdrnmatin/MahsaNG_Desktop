@@ -103,12 +103,16 @@ func sampleDelay(ctx context.Context, client *http.Client, validate bool) (int64
 			return -1, model.VerdictBlockPage, "marker absent (injected page)"
 		}
 		if int64(len(body)) < probeBodyBytes {
-			if err != nil { // stalled/RST'd mid-download: classify the teardown
-				return -1, classifyTransportErr(err), err.Error()
+			// We got here only after a clean handshake + 200 + marker, so a body
+			// that stops short is a post-handshake flow cut — Iran's byte-limit
+			// throttle, a different mechanism from a handshake SNI reset and one
+			// fragmentation can't fix. Keep it in its own bucket (and out of the
+			// tester's fragment auto-retry, which fires on VerdictReset).
+			detail := fmt.Sprintf("short body %dB", len(body))
+			if err != nil {
+				detail = err.Error()
 			}
-			// Clean EOF well short of the real page: the flow was cut, not the
-			// site — a throttled/byte-limited config that can't sustain traffic.
-			return -1, model.VerdictTimeout, fmt.Sprintf("short body %dB (throttled?)", len(body))
+			return -1, model.VerdictThrottled, detail
 		}
 	}
 	return elapsed.Milliseconds(), model.VerdictOK, ""
