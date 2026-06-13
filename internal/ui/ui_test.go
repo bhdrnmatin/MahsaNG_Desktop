@@ -3,6 +3,7 @@ package ui
 import (
 	"image/color"
 	"testing"
+	"time"
 
 	fyne "fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -10,6 +11,32 @@ import (
 
 	"mahsang/internal/model"
 )
+
+// TestFailedSkipExpiry checks the remember-and-skip logic: a fresh failure is
+// "recent" (GET CONFIG skips it), one older than failedTTL is not, and
+// pruneFailed drops the expired entry.
+func TestFailedSkipExpiry(t *testing.T) {
+	a := &App{failed: map[string]time.Time{
+		"fresh": time.Now(),
+		"old":   time.Now().Add(-2 * failedTTL),
+	}}
+	if !a.isFailedRecently("fresh") {
+		t.Error("fresh failure should count as recent")
+	}
+	if a.isFailedRecently("old") {
+		t.Error("failure older than failedTTL should have expired")
+	}
+	if a.isFailedRecently("unknown") {
+		t.Error("never-failed link should not be recent")
+	}
+	a.pruneFailed()
+	if _, ok := a.failed["old"]; ok {
+		t.Error("pruneFailed should drop the expired entry")
+	}
+	if _, ok := a.failed["fresh"]; !ok {
+		t.Error("pruneFailed should keep the fresh entry")
+	}
+}
 
 // TestRowUpdateConnectedMarker verifies the row template/update indexing is
 // correct (no panic) and that the left bar is green only for the connected

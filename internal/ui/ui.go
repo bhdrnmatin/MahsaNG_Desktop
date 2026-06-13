@@ -47,6 +47,13 @@ const (
 	testTargetGood = 10
 )
 
+// failedTTL is how long a config that TEST marked failed is remembered and
+// skipped by GET CONFIG, so known-bad configs are not re-downloaded and
+// re-tested every fetch. Kept short because Iran's blocking is time-variable: a
+// config dead today may recover, so the memory expires rather than blocklisting
+// forever.
+const failedTTL = 24 * time.Hour
+
 // App holds the running UI state.
 type App struct {
 	fyneApp fyne.App
@@ -69,6 +76,10 @@ type App struct {
 	tunnel *core.Tunnel
 	busy   bool // a fetch/test is running
 	cancel context.CancelFunc
+
+	// failed remembers link -> last failure time; GET CONFIG skips links failed
+	// within failedTTL so known-bad configs are not re-fetched and re-tested.
+	failed map[string]time.Time
 }
 
 // New builds the application and its window.
@@ -78,6 +89,7 @@ func New() *App {
 		providers: provider.Builtins(),
 		selected:  -1,
 		connected: -1,
+		failed:    map[string]time.Time{},
 	}
 	a.win = a.fyneApp.NewWindow("MahsaNG")
 	a.win.Resize(fyne.NewSize(560, 760))
@@ -100,6 +112,10 @@ func New() *App {
 		a.all = saved
 		a.rebuildView()
 		a.setStatus(fmt.Sprintf("Loaded %d saved configs.", len(saved)))
+	}
+	if f, err := store.LoadFailed(); err == nil {
+		a.failed = f
+		a.pruneFailed() // drop entries past failedTTL so the set stays bounded
 	}
 	return a
 }
@@ -295,11 +311,16 @@ func (a *App) onGetConfig() {
 				seen[c.Link] = struct{}{}
 			}
 			added := 0
+			skipped := 0
 			for _, c := range fetched {
 				if len(kept) >= maxServers {
 					break
 				}
 				if _, dup := seen[c.Link]; dup {
+					continue
+				}
+				if a.isFailedRecently(c.Link) {
+					skipped++ // tested-failed within failedTTL; don't re-test it
 					continue
 				}
 				kept = append(kept, c)
@@ -316,7 +337,11 @@ func (a *App) onGetConfig() {
 			if len(a.all) == 0 {
 				a.setStatus("No configs returned. Check provider/network.")
 			} else {
-				a.setStatus(fmt.Sprintf("Added %d new, %d total. Press TEST ALL.", added, len(a.all)))
+				skipNote := ""
+				if skipped > 0 {
+					skipNote = fmt.Sprintf(" (skipped %d recently-failed)", skipped)
+				}
+				a.setStatus(fmt.Sprintf("Added %d new, %d total%s. Press TEST ALL.", added, len(a.all), skipNote))
 			}
 		})
 	}()
@@ -402,6 +427,9 @@ func (a *App) onTest() {
 				}
 				if r.Verdict == model.VerdictOK {
 					good++
+					delete(a.failed, a.all[gi].Link) // recovered: forget past failure
+				} else {
+					a.failed[a.all[gi].Link] = time.Now() // remember so GET CONFIG skips it
 				}
 				// Status updates every result (cheap label); the heavier list
 				// redraw stays throttled so a big batch doesn't thrash.
@@ -417,6 +445,8 @@ func (a *App) onTest() {
 			a.setBusy(false)
 			a.testBtn.Enable()
 			a.persist() // ping results are worth keeping across runs
+			a.pruneFailed()
+			_ = store.SaveFailed(a.failed) // best-effort; remembers failures for GET CONFIG
 			a.list.Refresh()
 			// Show why the rest failed (reset vs timeout vs blocked), plus how
 			// many resets/working are CDN-frontable — together they point at the
@@ -685,5 +715,22 @@ func (a *App) setBusy(b bool) { a.busy = b }
 func (a *App) persist() {
 	if err := store.Save(a.all); err != nil {
 		a.setStatus("Warning: could not save configs: " + err.Error())
+	}
+}
+
+// isFailedRecently reports whether link was marked failed within failedTTL, so
+// GET CONFIG can skip re-downloading it.
+func (a *App) isFailedRecently(link string) bool {
+	t, ok := a.failed[link]
+	return ok && time.Since(t) < failedTTL
+}
+
+// pruneFailed drops failure records older than failedTTL so the set stays
+// bounded (and expired configs become eligible for testing again).
+func (a *App) pruneFailed() {
+	for link, t := range a.failed {
+		if time.Since(t) >= failedTTL {
+			delete(a.failed, link)
+		}
 	}
 }

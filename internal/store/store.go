@@ -9,6 +9,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"mahsang/internal/model"
 	"mahsang/internal/parser"
@@ -28,7 +29,7 @@ type entry struct {
 // Load reads the saved list and re-parses each link. A missing file is not an
 // error: it returns an empty list (first run).
 func Load() ([]model.Config, error) {
-	path, err := filePath()
+	path, err := filePath("configs.json")
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +46,7 @@ func Load() ([]model.Config, error) {
 // Save writes the list atomically (temp file + rename), creating the config
 // directory if needed.
 func Save(configs []model.Config) error {
-	path, err := filePath()
+	path, err := filePath("configs.json")
 	if err != nil {
 		return err
 	}
@@ -96,21 +97,66 @@ func decode(data []byte) ([]model.Config, error) {
 	return out, nil
 }
 
-// filePath returns <config-dir>/mahsang/configs.json. The app is normally
-// launched with sudo (Connect needs root), so when running elevated we use
-// the invoking user's home instead of root's — both modes then see the same
-// list.
-func filePath() (string, error) {
+// LoadFailed reads the remembered "link -> last failure time" map (used to skip
+// recently-failed configs on GET CONFIG). A missing file is not an error.
+func LoadFailed() (map[string]time.Time, error) {
+	path, err := filePath("failed.json")
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return map[string]time.Time{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	m := map[string]time.Time{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+// SaveFailed writes the failed-link map atomically (temp file + rename).
+func SaveFailed(failed map[string]time.Time) error {
+	path, err := filePath("failed.json")
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(failed, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	fixOwnership(dir, path)
+	return nil
+}
+
+// filePath returns <config-dir>/mahsang/<name>. The app is normally launched
+// with sudo (Connect needs root), so when running elevated we use the invoking
+// user's home instead of root's — both modes then see the same files.
+func filePath(name string) (string, error) {
 	if su := os.Getenv("SUDO_USER"); su != "" && os.Geteuid() == 0 {
 		if u, err := user.Lookup(su); err == nil {
-			return filepath.Join(u.HomeDir, ".config", "mahsang", "configs.json"), nil
+			return filepath.Join(u.HomeDir, ".config", "mahsang", name), nil
 		}
 	}
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "mahsang", "configs.json"), nil
+	return filepath.Join(dir, "mahsang", name), nil
 }
 
 // fixOwnership hands files created by a sudo run back to the invoking user,
