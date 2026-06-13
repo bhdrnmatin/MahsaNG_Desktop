@@ -18,6 +18,8 @@ import (
 	"net/http"
 	"time"
 
+	"mahsang/internal/logx"
+
 	xcore "github.com/xtls/xray-core/core"
 
 	// Register all inbound/outbound protocols and transports (vmess, vless,
@@ -183,6 +185,13 @@ func StartTunnel(outboundJSON []byte, socksPort int, fragment bool) (*Tunnel, er
 				"sniffing": sniffing,
 			},
 		},
+	}
+	// For the live tunnel, raise xray's log level and send its error log to a
+	// file so per-connection failures (the usual cause of "connected but no
+	// traffic") are visible. The throwaway probe instances stay silent. This
+	// overrides buildInstance's default {"loglevel":"none"} via the merge.
+	if p := logx.XrayLogPath(); p != "" {
+		extra["log"] = map[string]any{"loglevel": "warning", "error": p}
 	}
 	inst, err := buildInstance(outboundJSON, fragment, extra)
 	if err != nil {

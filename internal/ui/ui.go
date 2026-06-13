@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"image/color"
+	"log"
 	"net"
 	"net/url"
 	"sort"
@@ -648,8 +649,10 @@ func (a *App) onConnectToggle() {
 	a.setBusy(true)
 	a.setStatus("Connecting…")
 	go func() {
+		log.Printf("[connect] starting tunnel for %q (protocol=%s fragment=%v)", c.Name, c.Protocol, c.Fragment)
 		t, err := core.StartTunnel(c.Outbound, socksPort, c.Fragment)
 		if err != nil {
+			log.Printf("[connect] StartTunnel failed: %v", err)
 			fyne.Do(func() {
 				a.setBusy(false)
 				a.setStatus("Connect failed: " + err.Error())
@@ -662,9 +665,15 @@ func (a *App) onConnectToggle() {
 		if host, e := core.OutboundServer(c.Outbound); e == nil {
 			if addrs, e := net.LookupHost(host); e == nil {
 				ips = addrs
+				log.Printf("[connect] server %q resolved to %v (excluded from tunnel)", host, ips)
+			} else {
+				log.Printf("[connect] WARNING: could not resolve server %q: %v — its IP will NOT be excluded, which can cause a routing loop", host, e)
 			}
+		} else {
+			log.Printf("[connect] WARNING: could not read server host from outbound: %v", e)
 		}
 		if err := tun.Start(fmt.Sprintf("127.0.0.1:%d", t.SocksPort), ips); err != nil {
+			log.Printf("[connect] tun.Start failed: %v", err)
 			t.Close() // roll back; connect is all-or-nothing (whole system)
 			fyne.Do(func() {
 				a.setBusy(false)
@@ -672,6 +681,7 @@ func (a *App) onConnectToggle() {
 			})
 			return
 		}
+		log.Printf("[connect] tunnel up and TUN routing configured for %q", c.Name)
 		fyne.Do(func() {
 			a.tunnel = t
 			a.connected = target

@@ -143,6 +143,17 @@ func SaveFailed(failed map[string]time.Time) error {
 	return nil
 }
 
+// Dir returns the directory where the app keeps its files
+// (<config-dir>/mahsang), honouring the same SUDO_USER handling as filePath so
+// the log lands beside configs.json. It does not create the directory.
+func Dir() (string, error) {
+	p, err := filePath("configs.json")
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(p), nil
+}
+
 // filePath returns <config-dir>/mahsang/<name>. The app is normally launched
 // with sudo (Connect needs root), so when running elevated we use the invoking
 // user's home instead of root's — both modes then see the same files.

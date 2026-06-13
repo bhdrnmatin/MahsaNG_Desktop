@@ -10,6 +10,7 @@ package tun
 
 import (
 	"fmt"
+	"log"
 	"sync"
 
 	"github.com/xjasonlyu/tun2socks/v2/engine"
@@ -35,18 +36,22 @@ func Start(socksAddr string, serverIPs []string) error {
 	if running {
 		return nil
 	}
+	log.Printf("[tun] starting: device=tun://%s proxy=socks5://%s mtu=%d excludeIPs=%v",
+		tunName, socksAddr, tunMTU, serverIPs)
 	engine.Insert(&engine.Key{
 		Device:   "tun://" + tunName,
 		Proxy:    "socks5://" + socksAddr,
 		MTU:      tunMTU,
-		LogLevel: "silent",
+		LogLevel: "info", // was "silent"; engine output goes to stderr (see logx)
 	})
 	engine.Start()
 
 	if err := configureRoutes(tunName, serverIPs); err != nil {
+		log.Printf("[tun] configureRoutes failed: %v", err)
 		engine.Stop()
 		return fmt.Errorf("configure routes: %w", err)
 	}
+	log.Printf("[tun] routes configured; tunnel active")
 	running = true
 	return nil
 }
