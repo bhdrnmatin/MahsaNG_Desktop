@@ -11,6 +11,7 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"image/color"
 	"net"
@@ -384,7 +385,8 @@ func (a *App) onTest() {
 	total := len(testConfigs)
 	done := 0
 	good := 0
-	verdicts := map[model.Verdict]int{} // failure mix, for the final breakdown
+	verdicts := map[model.Verdict]int{}    // failure mix, for the final breakdown
+	cdnVerdicts := map[model.Verdict]int{} // of which were CDN-frontable transports
 
 	go func() {
 		tester.TestAll(ctx, testConfigs, testTargetGood, func(r tester.Result) {
@@ -395,6 +397,9 @@ func (a *App) onTest() {
 				a.all[gi].Fragment = r.Fragment
 				done++
 				verdicts[r.Verdict]++
+				if transportClass(a.all[gi].Outbound) == "CDN" {
+					cdnVerdicts[r.Verdict]++
+				}
 				if r.Verdict == model.VerdictOK {
 					good++
 				}
@@ -413,13 +418,37 @@ func (a *App) onTest() {
 			a.testBtn.Enable()
 			a.persist() // ping results are worth keeping across runs
 			a.list.Refresh()
-			// Show why the rest failed (reset vs timeout vs blocked) — it points
-			// at the lever that would raise yield. See memory note
+			// Show why the rest failed (reset vs timeout vs blocked), plus how
+			// many resets/working are CDN-frontable — together they point at the
+			// lever that would raise yield (CDN resets -> clean-IP scanning;
+			// direct resets -> better providers). See memory note
 			// config-testing-false-positives.
-			a.setStatus(fmt.Sprintf("Found %d working%s (probed %d/%d). Press SORT.",
-				good, verdictBreakdown(verdicts), done, total))
+			a.setStatus(fmt.Sprintf("Found %d working%s (probed %d/%d) — reset %d/%d CDN, working %d/%d CDN. Press SORT.",
+				good, verdictBreakdown(verdicts), done, total,
+				cdnVerdicts[model.VerdictReset], verdicts[model.VerdictReset],
+				cdnVerdicts[model.VerdictOK], verdicts[model.VerdictOK]))
 		})
 	}()
+}
+
+// transportClass labels a config by how it's reachable, for the TEST diagnostic:
+// "CDN" for ws/grpc/http transports (Cloudflare-frontable — the configs clean-IP
+// scanning could rescue), "direct" for tcp (incl. reality). Unparseable → direct.
+func transportClass(outbound []byte) string {
+	var o struct {
+		StreamSettings struct {
+			Network string `json:"network"`
+		} `json:"streamSettings"`
+	}
+	if err := json.Unmarshal(outbound, &o); err != nil {
+		return "direct"
+	}
+	switch o.StreamSettings.Network {
+	case "ws", "grpc", "http", "httpupgrade", "h2", "xhttp":
+		return "CDN"
+	default:
+		return "direct"
+	}
 }
 
 // verdictBreakdown renders the non-OK verdict tally as " · 71 timeout · 22 reset

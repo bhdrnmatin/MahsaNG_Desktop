@@ -83,6 +83,25 @@ func TestOnDeleteInvalid(t *testing.T) {
 	}
 }
 
+func TestTransportClass(t *testing.T) {
+	cases := []struct {
+		outbound string
+		want     string
+	}{
+		{`{"streamSettings":{"network":"ws","security":"tls"}}`, "CDN"},
+		{`{"streamSettings":{"network":"grpc"}}`, "CDN"},
+		{`{"streamSettings":{"network":"tcp","security":"tls"}}`, "direct"},
+		{`{"streamSettings":{"network":"tcp","security":"reality"}}`, "direct"},
+		{`{"streamSettings":{"network":"tcp"}}`, "direct"},
+		{`not json`, "direct"},
+	}
+	for _, c := range cases {
+		if got := transportClass([]byte(c.outbound)); got != c.want {
+			t.Errorf("transportClass(%s) = %q, want %q", c.outbound, got, c.want)
+		}
+	}
+}
+
 func TestIndexOfLink(t *testing.T) {
 	cfgs := []model.Config{{Link: "a"}, {Link: "b"}}
 	if got := indexOfLink(cfgs, "b"); got != 1 {
