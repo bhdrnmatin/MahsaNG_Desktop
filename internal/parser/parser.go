@@ -60,6 +60,9 @@ func parseVMess(link string) (model.Config, error) {
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return model.Config{}, fmt.Errorf("vmess json: %w", err)
 	}
+	if unsupportedTransport(v.Net) {
+		return model.Config{}, fmt.Errorf("vmess: unsupported transport %q", v.Net)
+	}
 	port := toInt(v.Port)
 	user := map[string]any{"id": v.ID, "alterId": toInt(v.Aid), "security": orDefault(v.Scy, "auto")}
 	ob := map[string]any{
@@ -87,6 +90,9 @@ func parseVLESS(link string) (model.Config, error) {
 		return model.Config{}, err
 	}
 	q := u.Query()
+	if unsupportedTransport(q.Get("type")) {
+		return model.Config{}, fmt.Errorf("vless: unsupported transport %q", q.Get("type"))
+	}
 	user := map[string]any{
 		"id":         u.User.Username(),
 		"encryption": orDefault(q.Get("encryption"), "none"),
@@ -111,6 +117,9 @@ func parseTrojan(link string) (model.Config, error) {
 		return model.Config{}, err
 	}
 	q := u.Query()
+	if unsupportedTransport(q.Get("type")) {
+		return model.Config{}, fmt.Errorf("trojan: unsupported transport %q", q.Get("type"))
+	}
 	ob := map[string]any{
 		"protocol": "trojan",
 		"settings": map[string]any{
@@ -286,6 +295,20 @@ func toInt(v any) int {
 	default:
 		return 0
 	}
+}
+
+// unsupportedTransport reports transports we deliberately drop at parse time.
+// xhttp/splithttp are skipped because xray-core's splithttp dialer ignores the
+// error from http.NewRequest and then nil-derefs (a whole-process panic) when
+// the URL is malformed — and that panic happens in xray's own goroutine, which
+// we cannot recover. We also don't emit xhttpSettings, so these configs would
+// not connect anyway; dropping them keeps the crash out of the app entirely.
+func unsupportedTransport(network string) bool {
+	switch strings.ToLower(strings.TrimSpace(network)) {
+	case "xhttp", "splithttp":
+		return true
+	}
+	return false
 }
 
 func orDefault(v, def string) string {

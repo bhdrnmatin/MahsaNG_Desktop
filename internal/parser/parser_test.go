@@ -111,3 +111,22 @@ func TestParseUnsupported(t *testing.T) {
 		t.Fatal("expected error for unsupported scheme")
 	}
 }
+
+// TestParseRejectsXHTTP: xhttp/splithttp configs must be dropped at parse so the
+// xray-core splithttp dialer's nil-deref panic can never be triggered.
+func TestParseRejectsXHTTP(t *testing.T) {
+	links := []string{
+		"vless://uuid@example.com:443?type=xhttp&security=tls&sni=a.com&path=%2Fx#x",
+		"vless://uuid@example.com:443?type=splithttp&security=reality&pbk=K&sni=a.com#x",
+		"trojan://pw@example.com:443?type=xhttp&security=tls#x",
+	}
+	for _, l := range links {
+		if _, err := Parse(l); err == nil {
+			t.Errorf("expected xhttp/splithttp to be rejected: %s", l)
+		}
+	}
+	// A normal ws config must still parse fine (guard isn't too broad).
+	if _, err := Parse("vless://uuid@example.com:443?type=ws&security=tls&host=a.com&path=%2Fx#x"); err != nil {
+		t.Errorf("ws config wrongly rejected: %v", err)
+	}
+}
