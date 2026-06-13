@@ -13,10 +13,17 @@ external binaries), with system-wide routing via
 ## Features
 
 - **GET CONFIG** — pulls fresh configs from several public aggregators at once,
-  de-duplicates, and keeps a weighted spread across sources
-- **TEST ALL** — measures real latency (HTTPS probe through each server) with
-  40 concurrent workers; **SORT** orders fastest-first
+  de-duplicates, keeps a weighted spread across sources, and skips configs that
+  failed a test in the last 24h (so you don't re-test known-bad servers)
+- **TEST ALL** — real-latency HTTPS probe through each server with 16 concurrent
+  workers, stopping early once enough live servers are found. The probe pulls a
+  real payload (not just a tiny response), so servers that connect but get
+  throttled are caught. Failures are classified by cause —
+  *reset / timeout / throttled / blocked / bad cfg* — so you can see *why* a
+  server didn't work. **SORT** orders fastest-first.
 - **Speed Test** — download throughput check for a single server
+- **Prune** — **Delete Invalid** drops tested-failed servers; **Delete All**
+  clears the whole list (with a confirm)
 - **Connect** — one click starts a local SOCKS5/HTTP proxy *and* a TUN device
   that routes all OS traffic through the server (apps that ignore proxy
   settings included)
@@ -45,8 +52,10 @@ and edits the routing table:
 ## Usage
 
 1. **GET CONFIG** (or paste your own subscription/links via the **+** button)
-2. **TEST ALL**, then **SORT** — dead servers show a red `-1ms`
-3. *(optional)* **Delete Invalid** to prune dead servers
+2. **TEST ALL**, then **SORT** — failed servers are labelled by reason
+   (reset / timeout / throttled / blocked); the status line shows a breakdown
+3. *(optional)* **Delete Invalid** to prune dead servers, or **Delete All** to
+   clear the list
 4. Select a server and press **Connect** — the whole system now routes
    through it. Press **Disconnect** to restore normal routing.
 
@@ -81,7 +90,7 @@ mahsang-cli speed <link>      # download throughput through one link
 
 ```
 provider  →  parser  →  tester  →  core (xray-core)  →  tun (tun2socks)
-fetch links  link →      40-worker   SOCKS/HTTP proxy +   TUN device +
+fetch links  link →      16-worker   SOCKS/HTTP proxy +   TUN device +
 from sources  outbound    ping pool   latency/speed probe   route override
               JSON
 ```
