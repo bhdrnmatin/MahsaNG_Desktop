@@ -4,10 +4,63 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"mahsang/internal/model"
 )
+
+// TestSampleDelayBodyGate covers the byte-limit / throttle check: a probe only
+// passes if the validated response both contains the marker AND sustains a full
+// payload past Iran's ~1–4KB cutoff. A connection that delivers the marker then
+// stops short (a throttled/blocked config) must fail, not report OK on TTFB.
+func TestSampleDelayBodyGate(t *testing.T) {
+	full := strings.Repeat("x", probeBodyBytes*2) // more than the gate
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ok", func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, "<html>"+measureMarker+full)
+	})
+	mux.HandleFunc("/short", func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, measureMarker+" but cut off early") // marker, tiny body
+	})
+	mux.HandleFunc("/nomarker", func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, full) // big enough, but injected page (no marker)
+	})
+	mux.HandleFunc("/bad", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	orig := measureURL
+	defer func() { measureURL = orig }()
+
+	cases := []struct {
+		path   string
+		want   model.Verdict
+		wantOK bool // expects a non-negative latency
+	}{
+		{"/ok", model.VerdictOK, true},
+		{"/short", model.VerdictTimeout, false},      // throttled: marker but short body
+		{"/nomarker", model.VerdictBlockPage, false}, // injected page
+		{"/bad", model.VerdictBlockPage, false},      // non-200
+	}
+	for _, c := range cases {
+		measureURL = srv.URL + c.path
+		ms, v, detail := sampleDelay(context.Background(), srv.Client(), true)
+		if v != c.want {
+			t.Errorf("%s: verdict = %v (%s), want %v", c.path, v, detail, c.want)
+		}
+		if c.wantOK && ms < 0 {
+			t.Errorf("%s: latency = %d, want >= 0", c.path, ms)
+		}
+		if !c.wantOK && ms != -1 {
+			t.Errorf("%s: latency = %d, want -1 on failure", c.path, ms)
+		}
+	}
+}
 
 // TestClassifyTransportErr pins the teardown-vs-drop distinction, including the
 // "closed pipe" form that xray's pipe-backed dialer reports for a refused or

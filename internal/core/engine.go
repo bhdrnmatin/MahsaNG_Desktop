@@ -33,7 +33,8 @@ import (
 // Reaching it proves the tunnel egresses *outside* the national filter, not
 // merely that the server accepts a connection — an unfiltered target like
 // Google answers even through a relay that is itself still behind the filter.
-const measureURL = "https://www.youtube.com/"
+// A var (not const) only so tests can point the probe at a local server.
+var measureURL = "https://www.youtube.com/"
 
 // measureMarker is a substring present in a genuine YouTube response but not in
 // the (Persian) national block page that the censor injects with HTTP 200 for

@@ -21,6 +21,14 @@ import (
 // that a single sample on a filtered uplink would mistake for a slow server.
 const latencySamples = 4
 
+// probeBodyBytes is how much of the validation response the probe must actually
+// pull before it counts a server as working. It sits well past Iran's ~1–4KB
+// byte-limit cutoff, so a config that *connects* but is then throttled to near
+// zero or RST'd after the first few KB — works for a tiny request, useless for
+// real traffic — fails the probe instead of being a false positive. See memory
+// note config-testing-false-positives.
+const probeBodyBytes = 64 << 10
+
 // ProbeDelay is the classifying form of MeasureDelay: it runs the same
 // YouTube-through-tunnel probe but, instead of folding every failure into one
 // error, reports which censorship mechanism the failure points to. Feed the
@@ -68,6 +76,9 @@ func sampleDelay(ctx context.Context, client *http.Client, validate bool) (int64
 	if err != nil {
 		return -1, model.VerdictProxyError, err.Error()
 	}
+	// Keep read bytes == wire bytes (no transparent gzip) so the volume we pull
+	// across the filter in the validate path below is what we think it is.
+	req.Header.Set("Accept-Encoding", "identity")
 	start := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
@@ -82,9 +93,22 @@ func sampleDelay(ctx context.Context, client *http.Client, validate bool) (int64
 		return -1, model.VerdictBlockPage, fmt.Sprintf("http %d", resp.StatusCode)
 	}
 	if validate {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<10))
+		// Pull a payload well past Iran's byte-limit cutoff. A flow that is let
+		// through then throttled/blocked stalls here until the client timeout or
+		// gets RST'd mid-body, so it fails the probe instead of passing on TTFB
+		// alone. youtube.com always serves far more than this, so a short read is
+		// the censor, not the site.
+		body, err := io.ReadAll(io.LimitReader(resp.Body, probeBodyBytes))
 		if !bytes.Contains(bytes.ToLower(body), []byte(measureMarker)) {
 			return -1, model.VerdictBlockPage, "marker absent (injected page)"
+		}
+		if int64(len(body)) < probeBodyBytes {
+			if err != nil { // stalled/RST'd mid-download: classify the teardown
+				return -1, classifyTransportErr(err), err.Error()
+			}
+			// Clean EOF well short of the real page: the flow was cut, not the
+			// site — a throttled/byte-limited config that can't sustain traffic.
+			return -1, model.VerdictTimeout, fmt.Sprintf("short body %dB (throttled?)", len(body))
 		}
 	}
 	return elapsed.Milliseconds(), model.VerdictOK, ""
