@@ -164,6 +164,9 @@ func (a *App) buildContent() fyne.CanvasObject {
 	speedBtn := widget.NewButton("Speed Test", a.onSpeedTest)
 	actionRow := container.NewGridWithColumns(2, a.connBtn, speedBtn)
 	a.status = widget.NewLabel("Ready. Press GET CONFIG.")
+	// Wrap long status text (e.g. the TEST result breakdown) instead of letting
+	// it dictate a wider minimum size, which would grow the window.
+	a.status.Wrapping = fyne.TextWrapWord
 	bottom := container.NewVBox(buttons, actionRow, a.status)
 
 	return container.NewBorder(top, bottom, nil, nil, a.list)
