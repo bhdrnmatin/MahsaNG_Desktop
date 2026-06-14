@@ -24,6 +24,12 @@ type entry struct {
 	PingMs   int64         `json:"ping_ms"`
 	Verdict  model.Verdict `json:"verdict"`
 	Fragment bool          `json:"fragment,omitempty"`
+	// RawConfig is set only for serverless configs (no share link to re-parse);
+	// they are rebuilt from it directly instead of via parser.Parse.
+	RawConfig []byte `json:"raw_config,omitempty"`
+	// Name is persisted only for serverless configs, whose label comes from the
+	// feed's "remarks" rather than a link.
+	Name string `json:"name,omitempty"`
 }
 
 // Load reads the saved list and re-parses each link. A missing file is not an
@@ -73,6 +79,10 @@ func encode(configs []model.Config) ([]byte, error) {
 	entries := make([]entry, len(configs))
 	for i, c := range configs {
 		entries[i] = entry{Link: c.Link, Provider: c.Provider, PingMs: c.PingMs, Verdict: c.LastVerdict, Fragment: c.Fragment}
+		if c.IsServerless() {
+			entries[i].RawConfig = c.RawConfig
+			entries[i].Name = c.Name
+		}
 	}
 	return json.MarshalIndent(entries, "", "  ")
 }
@@ -84,9 +94,16 @@ func decode(data []byte) ([]model.Config, error) {
 	}
 	out := make([]model.Config, 0, len(entries))
 	for _, e := range entries {
-		c, err := parser.Parse(e.Link)
-		if err != nil {
-			continue // link no longer parseable; drop it
+		var c model.Config
+		if len(e.RawConfig) > 0 {
+			// Serverless: rebuild directly, no link to parse.
+			c = model.Config{Link: e.Link, Name: e.Name, Protocol: "SERVERLESS", RawConfig: e.RawConfig}
+		} else {
+			parsed, err := parser.Parse(e.Link)
+			if err != nil {
+				continue // link no longer parseable; drop it
+			}
+			c = parsed
 		}
 		c.Provider = e.Provider
 		c.PingMs = e.PingMs

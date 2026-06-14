@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"mahsang/internal/model"
+
+	xcore "github.com/xtls/xray-core/core"
 )
 
 // latencySamples is how many requests one ProbeDelay sends through the same
@@ -45,7 +47,12 @@ func ProbeDelay(ctx context.Context, outboundJSON []byte, timeout time.Duration,
 		return model.ProbeResult{Verdict: model.VerdictProxyError, PingMs: model.PingFailed, Detail: err.Error()}
 	}
 	defer inst.Close()
+	return probeInstance(ctx, inst, timeout)
+}
 
+// probeInstance runs the latency probe through an already-started instance,
+// sampling several times and reporting the median (or the failure verdict).
+func probeInstance(ctx context.Context, inst *xcore.Instance, timeout time.Duration) model.ProbeResult {
 	client := &http.Client{Transport: proxyTransport(inst), Timeout: timeout}
 
 	// The first sample also validates the body is genuinely the target (not a

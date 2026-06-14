@@ -4,8 +4,9 @@ package model
 
 // Sentinel values for Config.PingMs (a real measurement is >= 0).
 const (
-	PingUntested int64 = -2 // not tested yet
-	PingFailed   int64 = -1 // tested, but the server returned no result
+	PingUntested  int64 = -2 // not tested yet
+	PingFailed    int64 = -1 // tested, but the server returned no result
+	PingAvailable int64 = -3 // serverless: not probed, always treated as available
 )
 
 // Verdict classifies *why* a probe through a tunnel succeeded or failed, mapping
@@ -66,7 +67,14 @@ type Config struct {
 	Provider string
 	// Outbound is the xray-core outbound JSON for this server, used to build a
 	// measuring instance and (later) the live tunnel. Filled by the parser.
+	// Empty for serverless configs, which carry a whole config in RawConfig.
 	Outbound []byte
+	// RawConfig is a complete xray-core config JSON (dns/outbounds/routing), used
+	// by "serverless" providers that ship a full fragment/noise/routing setup with
+	// no proxy server rather than a single outbound. When set, the whole pipeline
+	// treats this config as serverless: it builds the instance from RawConfig and
+	// skips the single-server assumptions (TCP pre-filter, server exclusion).
+	RawConfig []byte
 	// PingMs is the last measured real-ping latency in milliseconds, or one of
 	// the PingUntested / PingFailed sentinels.
 	PingMs int64
@@ -78,3 +86,8 @@ type Config struct {
 	// and then used for every probe and the live tunnel.
 	Fragment bool
 }
+
+// IsServerless reports whether this config is a whole-config "serverless" entry
+// (RawConfig set) rather than a single proxy outbound. The core, tester, store
+// and UI branch on it to use the full-config code path.
+func (c Config) IsServerless() bool { return len(c.RawConfig) > 0 }

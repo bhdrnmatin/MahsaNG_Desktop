@@ -245,6 +245,8 @@ func pingLabel(ms int64, v model.Verdict) (string, color.Color) {
 	switch {
 	case ms == model.PingUntested:
 		return "—", color.Gray{Y: 0x88}
+	case ms == model.PingAvailable: // serverless: not probed, always available
+		return "available", color.NRGBA{R: 0x22, G: 0xc5, B: 0x5e, A: 0xff} // green
 	case ms < 0: // PingFailed: show *why* it failed, not a useless -1ms
 		return verdictLabel(v)
 	case ms < 800:
@@ -303,20 +305,42 @@ func (a *App) onGetConfig() {
 		})
 		fetched = tester.FilterAlive(ctx, fetched)
 		fyne.Do(func() {
-			// Drop tested-and-failed configs, keep working + untested ones,
-			// then top up with newly fetched configs (deduped) up to the cap.
-			kept := make([]model.Config, 0, len(a.all))
+			// Serverless configs can't go dead, so they're pinned to the top and
+			// always kept — exempt from the failed-skip and the cap. The scrape
+			// configs follow: existing working/untested ones, then newly fetched
+			// ones (deduped) up to the cap.
+			var serverless []model.Config
+			rest := fetched[:0:0]
+			for _, c := range fetched {
+				if c.IsServerless() {
+					serverless = append(serverless, c)
+				} else {
+					rest = append(rest, c)
+				}
+			}
+
+			kept := make([]model.Config, 0, len(a.all)+len(serverless))
 			seen := make(map[string]struct{})
+			for _, c := range serverless {
+				if _, dup := seen[c.Link]; dup {
+					continue
+				}
+				kept = append(kept, c)
+				seen[c.Link] = struct{}{}
+			}
 			for _, c := range a.all {
 				if c.PingMs == model.PingFailed {
 					continue
+				}
+				if _, dup := seen[c.Link]; dup {
+					continue // already pinned (a fresh serverless copy)
 				}
 				kept = append(kept, c)
 				seen[c.Link] = struct{}{}
 			}
 			added := 0
 			skipped := 0
-			for _, c := range fetched {
+			for _, c := range rest {
 				if len(kept) >= maxServers {
 					break
 				}
@@ -402,8 +426,15 @@ func (a *App) onTest() {
 	}
 	a.setBusy(true)
 	a.testBtn.Disable() // visual cue it's running; stops repeat clicks
-	a.setStatus(fmt.Sprintf("Testing… 0/%d probed", len(a.view)))
-	idxs := append([]int(nil), a.view...) // snapshot of visible indices
+	// Serverless configs are never probed (always "available"); exclude them so
+	// the strict probe can't false-fail them and the progress count stays honest.
+	idxs := make([]int, 0, len(a.view))
+	for _, gi := range a.view {
+		if !a.all[gi].IsServerless() {
+			idxs = append(idxs, gi)
+		}
+	}
+	a.setStatus(fmt.Sprintf("Testing… 0/%d probed", len(idxs)))
 	testConfigs := make([]model.Config, len(idxs))
 	for i, gi := range idxs {
 		testConfigs[i] = a.all[gi]
@@ -606,7 +637,16 @@ func (a *App) onSpeedTest() {
 	a.setBusy(true)
 	a.setStatus("Speed testing " + c.Name + " …")
 	go func() {
-		mbps, n, err := core.MeasureSpeed(context.Background(), c.Outbound, 10*time.Second, c.Fragment)
+		var (
+			mbps float64
+			n    int64
+			err  error
+		)
+		if c.IsServerless() {
+			mbps, n, err = core.MeasureSpeedFull(context.Background(), c.RawConfig, 10*time.Second)
+		} else {
+			mbps, n, err = core.MeasureSpeed(context.Background(), c.Outbound, 10*time.Second, c.Fragment)
+		}
 		fyne.Do(func() {
 			a.setBusy(false)
 			if err != nil {
@@ -640,12 +680,19 @@ func (a *App) onConnectToggle() {
 		a.setStatus("Select a config first, then Connect.")
 		return
 	}
+	target := a.selected
+	c := a.all[target]
+	// Serverless configs egress entirely "direct" (no proxy server), so system
+	// TUN routing would loop every connection back through the tunnel. For now
+	// they connect as a local SOCKS/HTTP proxy only (no TUN, no root needed).
+	if c.IsServerless() {
+		a.connectServerless(target, c)
+		return
+	}
 	if !tun.Elevated() {
 		a.setStatus("System-wide connect needs admin rights — run as root/Administrator.")
 		return
 	}
-	target := a.selected
-	c := a.all[target]
 	a.setBusy(true)
 	a.setStatus("Connecting…")
 	go func() {
@@ -689,6 +736,59 @@ func (a *App) onConnectToggle() {
 			a.list.Refresh()
 			a.setBusy(false)
 			a.setStatus(fmt.Sprintf("Connected (system-wide) via %s.", c.Name))
+		})
+	}()
+}
+
+// connectServerless brings up a serverless config. When we can bind its direct
+// egress to the physical NIC (root + a known default interface, i.e. Linux), it
+// goes system-wide through the TUN with that egress excluded from the tunnel so
+// it doesn't loop. Otherwise it falls back to a local SOCKS5/HTTP proxy the user
+// points their browser at. Disconnect goes through the same toggle path.
+func (a *App) connectServerless(target int, c model.Config) {
+	iface := ""
+	if tun.Elevated() {
+		iface = tun.DefaultInterface() // "" off Linux / if undetectable -> proxy mode
+	}
+	useTUN := iface != ""
+
+	a.setBusy(true)
+	a.setStatus("Connecting (serverless)…")
+	go func() {
+		log.Printf("[connect] starting serverless tunnel for %q (tun=%v iface=%q)", c.Name, useTUN, iface)
+		t, err := core.StartTunnelFull(c.RawConfig, socksPort, iface)
+		if err != nil {
+			log.Printf("[connect] StartTunnelFull failed: %v", err)
+			fyne.Do(func() {
+				a.setBusy(false)
+				a.setStatus("Connect failed: " + err.Error())
+			})
+			return
+		}
+		if useTUN {
+			// No server IP to exclude — the egress is kept off the TUN by being
+			// bound to the NIC in the config instead.
+			if err := tun.Start(fmt.Sprintf("127.0.0.1:%d", t.SocksPort), nil); err != nil {
+				log.Printf("[connect] tun.Start failed: %v", err)
+				t.Close()
+				fyne.Do(func() {
+					a.setBusy(false)
+					a.setStatus("Connect failed (TUN routing): " + err.Error())
+				})
+				return
+			}
+		}
+		fyne.Do(func() {
+			a.tunnel = t
+			a.connected = target
+			a.connBtn.SetText("Disconnect")
+			a.list.Refresh()
+			a.setBusy(false)
+			if useTUN {
+				a.setStatus(fmt.Sprintf("Connected (system-wide, serverless) via %s.", c.Name))
+			} else {
+				a.setStatus(fmt.Sprintf("Serverless proxy up — set browser to SOCKS5 127.0.0.1:%d (or HTTP 127.0.0.1:%d). Run as root for system-wide.", t.SocksPort, t.HTTPPort))
+			}
 		})
 	}()
 }

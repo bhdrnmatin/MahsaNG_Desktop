@@ -106,6 +106,87 @@ func buildInstance(outboundJSON []byte, fragment bool, extra map[string]any) (*x
 	return inst, nil
 }
 
+// buildFullInstance creates (but does not start) an xray instance from a
+// complete config JSON (a serverless config: its own dns/outbounds/routing, no
+// proxy server). It drops the config's fixed inbound — we supply our own via
+// extra (a SOCKS inbound for the tunnel, or none for the probe, which dials
+// through the instance directly). The geosite/geoip rules these configs use need
+// the geo assets, so we ensure them first.
+func buildFullInstance(rawConfig []byte, extra map[string]any, iface string) (*xcore.Instance, error) {
+	if err := EnsureGeoAssets(); err != nil {
+		return nil, err
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(rawConfig, &cfg); err != nil {
+		return nil, fmt.Errorf("parse serverless config: %w", err)
+	}
+	delete(cfg, "inbounds") // replaced by extra (or omitted for the probe)
+	// Under system TUN, bind the config's direct egress to the physical NIC so
+	// those packets skip the TUN default route and don't loop back into it.
+	if iface != "" {
+		bindDirectOutbounds(cfg, iface)
+	}
+	maps.Copy(cfg, extra)
+	cfgBytes, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, err
+	}
+	pbConfig, err := serial.LoadJSONConfig(bytes.NewReader(cfgBytes))
+	if err != nil {
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+	inst, err := xcore.New(pbConfig)
+	if err != nil {
+		return nil, fmt.Errorf("new instance: %w", err)
+	}
+	return inst, nil
+}
+
+// startFullInstance builds and starts a throwaway, silent instance from a full
+// serverless config, used by the delay and speed probes. No TUN is active for
+// these, so the egress is left unbound. The caller must Close it.
+func startFullInstance(rawConfig []byte) (*xcore.Instance, error) {
+	inst, err := buildFullInstance(rawConfig, map[string]any{"log": map[string]any{"loglevel": "none"}}, "")
+	if err != nil {
+		return nil, err
+	}
+	if err := inst.Start(); err != nil {
+		return nil, fmt.Errorf("start: %w", err)
+	}
+	return inst, nil
+}
+
+// bindDirectOutbounds sets streamSettings.sockopt.interface = iface on every
+// direct/freedom outbound in cfg, so xray dials those out the given device
+// (SO_BINDTODEVICE) rather than via the routing table — keeping the live
+// serverless tunnel's own egress off the TUN. Existing sockopt is preserved.
+func bindDirectOutbounds(cfg map[string]any, iface string) {
+	obs, ok := cfg["outbounds"].([]any)
+	if !ok {
+		return
+	}
+	for _, o := range obs {
+		ob, ok := o.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch ob["protocol"] {
+		case "direct", "freedom":
+			ss, _ := ob["streamSettings"].(map[string]any)
+			if ss == nil {
+				ss = map[string]any{}
+				ob["streamSettings"] = ss
+			}
+			sockopt, _ := ss["sockopt"].(map[string]any)
+			if sockopt == nil {
+				sockopt = map[string]any{}
+				ss["sockopt"] = sockopt
+			}
+			sockopt["interface"] = iface
+		}
+	}
+}
+
 // fragmentOutbound is a freedom outbound that splits the outgoing TLS
 // ClientHello across packets, so DPI reading the SNI cannot reassemble it. The
 // proxy outbound routes its dial through this via sockopt.dialerProxy. The
@@ -168,7 +249,38 @@ type Tunnel struct {
 // outbound. When fragment is set the tunnel fragments the TLS ClientHello (for
 // servers the tester found need it). Call Close to stop it.
 func StartTunnel(outboundJSON []byte, socksPort int, fragment bool) (*Tunnel, error) {
-	httpPort := socksPort + 1
+	inst, err := buildInstance(outboundJSON, fragment, tunnelExtra(socksPort))
+	if err != nil {
+		return nil, err
+	}
+	if err := inst.Start(); err != nil {
+		return nil, fmt.Errorf("start tunnel: %w", err)
+	}
+	return &Tunnel{inst: inst, SocksPort: socksPort, HTTPPort: socksPort + 1}, nil
+}
+
+// StartTunnelFull is StartTunnel for a serverless config: it builds the tunnel
+// from the whole config (its own fragment/noise/routing) instead of wrapping a
+// single outbound. There is no proxy server, so no fragment flag. When iface is
+// non-empty (system TUN mode) the config's direct egress is bound to that NIC so
+// it skips the TUN; pass "" for local-proxy mode.
+func StartTunnelFull(rawConfig []byte, socksPort int, iface string) (*Tunnel, error) {
+	inst, err := buildFullInstance(rawConfig, tunnelExtra(socksPort), iface)
+	if err != nil {
+		return nil, err
+	}
+	if err := inst.Start(); err != nil {
+		return nil, fmt.Errorf("start tunnel: %w", err)
+	}
+	return &Tunnel{inst: inst, SocksPort: socksPort, HTTPPort: socksPort + 1}, nil
+}
+
+// tunnelExtra is the top-level config fragment shared by both tunnel builders: a
+// local SOCKS inbound on socksPort and an HTTP inbound on socksPort+1, plus the
+// live-tunnel log settings. For the live tunnel we raise xray's log level and
+// send its error log to a file so per-connection failures (the usual cause of
+// "connected but no traffic") are visible; throwaway probe instances stay silent.
+func tunnelExtra(socksPort int) map[string]any {
 	sniffing := map[string]any{"enabled": true, "destOverride": []any{"http", "tls"}}
 	extra := map[string]any{
 		"inbounds": []any{
@@ -179,28 +291,17 @@ func StartTunnel(outboundJSON []byte, socksPort int, fragment bool) (*Tunnel, er
 				"sniffing": sniffing,
 			},
 			map[string]any{
-				"tag": "http-in", "listen": "127.0.0.1", "port": httpPort,
+				"tag": "http-in", "listen": "127.0.0.1", "port": socksPort + 1,
 				"protocol": "http",
 				"settings": map[string]any{},
 				"sniffing": sniffing,
 			},
 		},
 	}
-	// For the live tunnel, raise xray's log level and send its error log to a
-	// file so per-connection failures (the usual cause of "connected but no
-	// traffic") are visible. The throwaway probe instances stay silent. This
-	// overrides buildInstance's default {"loglevel":"none"} via the merge.
 	if p := logx.XrayLogPath(); p != "" {
 		extra["log"] = map[string]any{"loglevel": "warning", "error": p}
 	}
-	inst, err := buildInstance(outboundJSON, fragment, extra)
-	if err != nil {
-		return nil, err
-	}
-	if err := inst.Start(); err != nil {
-		return nil, fmt.Errorf("start tunnel: %w", err)
-	}
-	return &Tunnel{inst: inst, SocksPort: socksPort, HTTPPort: httpPort}, nil
+	return extra
 }
 
 // Close stops the tunnel and releases the local port.
@@ -235,7 +336,23 @@ func MeasureSpeed(ctx context.Context, outboundJSON []byte, window time.Duration
 		return 0, 0, err
 	}
 	defer inst.Close()
+	return speedThroughInstance(ctx, inst, window)
+}
 
+// MeasureSpeedFull is MeasureSpeed for a serverless config: it measures
+// throughput through an instance built from the whole config.
+func MeasureSpeedFull(ctx context.Context, rawConfig []byte, window time.Duration) (mbps float64, bytes int64, err error) {
+	inst, err := startFullInstance(rawConfig)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer inst.Close()
+	return speedThroughInstance(ctx, inst, window)
+}
+
+// speedThroughInstance runs the throughput probe through an already-started
+// instance, trying each speed target in turn until one yields a reading.
+func speedThroughInstance(ctx context.Context, inst *xcore.Instance, window time.Duration) (mbps float64, bytes int64, err error) {
 	client := &http.Client{Transport: proxyTransport(inst)}
 	var lastErr error
 	for _, url := range speedURLs {

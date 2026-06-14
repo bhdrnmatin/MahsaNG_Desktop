@@ -35,11 +35,18 @@ var builtinSources = []struct {
 	{"MhdiTaheri", "https://raw.githubusercontent.com/MhdiTaheri/V2rayCollector/main/sub/mix", 2},
 }
 
+// serverlessURL is the patterniha/Serverless-for-Iran feed: whole xray configs
+// (fragment/noise/routing, no proxy server) that bypass filtering server-side.
+// Unlike the scraped sources these never go dead, so they ride along as a
+// reliable fallback that's always present in the list.
+const serverlessURL = "https://raw.githubusercontent.com/patterniha/Serverless-for-Iran/refs/heads/main/Subscription/Serverless-for-Iran.json"
+
 // Builtins returns the providers enabled by default.
 func Builtins() []Provider {
-	out := make([]Provider, 0, len(builtinSources))
+	out := make([]Provider, 0, len(builtinSources)+1)
 	for _, s := range builtinSources {
 		out = append(out, NewWeightedSubscription(s.name, s.url, s.weight))
 	}
+	out = append(out, NewServerless("Serverless", serverlessURL))
 	return out
 }

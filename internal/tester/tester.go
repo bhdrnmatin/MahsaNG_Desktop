@@ -164,6 +164,12 @@ func FilterAlive(ctx context.Context, configs []model.Config) []model.Config {
 		go func() {
 			defer wg.Done()
 			for i := range jobs {
+				// Serverless configs have no single server to dial — they are
+				// always "reachable" in this sense; the real test is the probe.
+				if configs[i].IsServerless() {
+					alive[i] = true
+					continue
+				}
 				addr, err := core.OutboundHostPort(configs[i].Outbound)
 				if err != nil {
 					continue

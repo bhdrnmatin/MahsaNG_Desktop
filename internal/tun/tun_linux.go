@@ -66,6 +66,18 @@ func restoreRoutes(dev string) error {
 	return nil
 }
 
+// DefaultInterface returns the physical interface carrying the default route
+// (e.g. "eth0", "wlan0"), or "" if it can't be determined. Serverless TUN mode
+// binds xray's direct egress to this device (SO_BINDTODEVICE) so its packets
+// skip the TUN default and don't loop.
+func DefaultInterface() string {
+	_, dev, err := defaultRoute()
+	if err != nil {
+		return ""
+	}
+	return dev
+}
+
 // defaultRoute parses `ip route show default` -> gateway and interface.
 func defaultRoute() (gw, dev string, err error) {
 	out, err := exec.Command("ip", "route", "show", "default").Output()
